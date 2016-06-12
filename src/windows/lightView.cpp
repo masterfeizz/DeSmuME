@@ -1,28 +1,31 @@
-/*  Copyright (C) 2007 Acid Burn
+/*
+	Copyright (C) 2007 Acid Burn
+	Copyright (C) 2008-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "lightView.h"
-#include "commctrl.h"
+
+#include <commctrl.h>
+
+#include "../debug.h"
+#include "../gfx3d.h"
+
 #include "colorctrl.h"
-#include "gfx3d.h"
 #include "resource.h"
-#include "debug.h"
+#include "main.h"
 
 // Convert B5G5R5 color format into R8G8B8 color format
 unsigned int ColorConv_B5R5R5ToR8G8B8(const unsigned int color)
@@ -60,14 +63,14 @@ void LightView_OnPaintLight(HWND hwnd, int index)
 		IDC_LIGHT_VIEWER_LIGHT2COLOR_COLORCTRL, IDC_LIGHT_VIEWER_LIGHT3COLOR_COLORCTRL
 	};
 
-	unsigned int	color;
-	unsigned int	direction;
-	ColorCtrl*		colorCtrl;
+	u32	color;
+	u32	direction;
+	//ColorCtrl*		colorCtrl;
 	char			buffer[128];
 
 	// Get necessary information from gfx3d module
-	gfx3d_glGetLightColor(index, &color);
-	gfx3d_glGetLightDirection(index, &direction);
+	gfx3d_glGetLightColor(index, color);
+	gfx3d_glGetLightDirection(index, direction);
 
 	// Print Light Direction
 	sprintf(buffer, "%.8x", direction);
@@ -120,12 +123,8 @@ BOOL CALLBACK ViewLightsProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 					KillTimer(hwnd, IDT_VIEW_LIGHTS);
 					LightsView->autoup = false;
 				}
-
-				if (LightsView!=NULL) 
-				{
-					delete LightsView;
-					LightsView = NULL;
-				}
+				delete LightsView;
+				LightsView = NULL;
 			//INFO("Close lights viewer dialog\n");
 			PostQuitMessage(0);
 			break;

@@ -1,47 +1,55 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright (C) 2009-2015 DeSmuME team
 
-	Copyright (C) 2009 DeSmuME team
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    This file is part of DeSmuME
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "gbaslot_config.h"
+
 #include <windowsx.h>
-#include "resource.h"
-#include "debug.h"
-#include "../addons.h"
-#include "../NDSSystem.h"
 #include <shlobj.h>
 
+#include "../debug.h"
+#include "../slot2.h"
+#include "../NDSSystem.h"
+
+#include "resource.h"
+#include "inputdx.h"
+#include "main.h"
+#include "winutil.h"
+
 WNDCLASSEX	wc;
-HWND		wndConfig;
+HWND		wndConfig = NULL;
 u8			temp_type = 0;
-u8			last_type;
-char		tmp_cflash_filename[MAX_PATH];
-char		tmp_cflash_path[MAX_PATH];
-char		tmp_gbagame_filename[MAX_PATH];
-u8			tmp_CFlashUsePath;
-u8			tmp_CFlashUseRomPath;
+u8			last_type = 0;
+char		tmp_cflash_filename[MAX_PATH] = { 0 };
+char		tmp_cflash_path[MAX_PATH] = { 0 };
+char		tmp_gbagame_filename[MAX_PATH] = { 0 };
+ADDON_CFLASH_MODE	tmp_CFlashMode = ADDON_CFLASH_MODE_RomPath;
 HWND		OKbutton = NULL;
 bool		_OKbutton = false;
+SGuitar		tmp_Guitar;
+SPiano		tmp_Piano;
+SPaddle		tmp_Paddle;
 
-BOOL CALLBACK GbaSlotNone(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+//these are the remembered preset values for directory and filename
+//they are named very verbosely to distinguish them from the currently-configured values in addons.cpp
+std::string win32_CFlash_cfgDirectory, win32_CFlash_cfgFileName;
+UINT win32_CFlash_cfgMode;
+std::string win32_GBA_cfgRomPath;
+
+INT_PTR CALLBACK GbaSlotNone(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 {
 	switch(msg)
 	{
@@ -54,42 +62,47 @@ BOOL CALLBACK GbaSlotNone(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 	return FALSE;
 }
 
-BOOL CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+INT_PTR CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 {
 	switch(msg)
 	{
 		case WM_INITDIALOG: 
 		{
-			SetWindowText(GetDlgItem(dialog, IDC_PATHIMG), tmp_cflash_filename);
-			SetWindowText(GetDlgItem(dialog, IDC_PATH), tmp_cflash_path);
-			if (tmp_CFlashUsePath)
+			switch (tmp_CFlashMode)
 			{
-				if (tmp_CFlashUseRomPath)
-				{
+				case ADDON_CFLASH_MODE_Path:
+					SetFocus(GetDlgItem(dialog,IDC_RFOLDER));
+					CheckDlgButton(dialog, IDC_RFOLDER, BST_CHECKED);
+					EnableWindow(GetDlgItem(dialog, IDC_PATH), TRUE);
+					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), TRUE);
+					EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), FALSE);
+					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), FALSE);
+					if (strlen(tmp_cflash_path)) _OKbutton = TRUE;
+				break;
+
+				case ADDON_CFLASH_MODE_File:
+					SetFocus(GetDlgItem(dialog,IDC_RFILE));
+					CheckDlgButton(dialog, IDC_RFILE, BST_CHECKED);
+					EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), TRUE);
+					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), TRUE);
+					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), FALSE);
+					EnableWindow(GetDlgItem(dialog, IDC_PATH), FALSE);
+					if (strlen(tmp_cflash_filename)) _OKbutton = TRUE;
+				break;
+
+				case ADDON_CFLASH_MODE_RomPath:
+					SetFocus(GetDlgItem(dialog,IDC_PATHDESMUME));
 					CheckDlgButton(dialog, IDC_PATHDESMUME, BST_CHECKED);
 					EnableWindow(GetDlgItem(dialog, IDC_PATH), FALSE);
 					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), FALSE);
+					EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), FALSE);
+					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), FALSE);
 					_OKbutton = TRUE;
-				}
-				else
-				{
-					EnableWindow(GetDlgItem(dialog, IDC_PATH), TRUE);
-					EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), TRUE);
-					if (strlen(tmp_cflash_path)) _OKbutton = TRUE;
-				}
-				EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), FALSE);
-				EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), FALSE);
-				CheckDlgButton(dialog, IDC_RFOLDER, BST_CHECKED);
+				break;
 			}
-			else
-			{
-				EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), FALSE);
-				EnableWindow(GetDlgItem(dialog, IDC_PATHDESMUME), FALSE);
-				EnableWindow(GetDlgItem(dialog, IDC_PATH), FALSE);
-				if (strlen(tmp_cflash_filename)) _OKbutton = TRUE;
-				CheckDlgButton(dialog, IDC_RFILE, BST_CHECKED);
-			}
-			return TRUE;
+			SetWindowText(GetDlgItem(dialog, IDC_PATHIMG), tmp_cflash_filename);
+			SetWindowText(GetDlgItem(dialog, IDC_PATH), tmp_cflash_path);
+			return FALSE;
 		}
 
 		case WM_COMMAND:
@@ -100,25 +113,21 @@ BOOL CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 				{
 					int filterSize = 0, i = 0;
                     OPENFILENAME ofn;
-                    char filename[MAX_PATH] = "",
-						 fileFilter[512]="";
+                    char filename[MAX_PATH] = "";
+
                     
                     ZeroMemory(&ofn, sizeof(ofn));
                     ofn.lStructSize = sizeof(ofn);
                     ofn.hwndOwner = dialog;
 
-					strncpy (fileFilter, "Compact Flash image (*.img)|*.img||",512 - strlen(fileFilter));
-					strncat (fileFilter, "Any file (*.*)|*.*||",512 - strlen(fileFilter));
+					const char *fileFilter = "FAT image (*.img)\0*.img\0Any file (*.*)\0*.*\0";
 					
-					filterSize = strlen(fileFilter);
-					for (i = 0; i < filterSize; i++)
-						if (fileFilter[i] == '|')	fileFilter[i] = '\0';
                     ofn.lpstrFilter = fileFilter;
                     ofn.nFilterIndex = 1;
                     ofn.lpstrFile =  filename;
                     ofn.nMaxFile = MAX_PATH;
                     ofn.lpstrDefExt = "img";
-					ofn.Flags = OFN_NOCHANGEDIR | OFN_CREATEPROMPT;
+					ofn.Flags = OFN_NOCHANGEDIR | OFN_CREATEPROMPT | OFN_PATHMUSTEXIST;
                     
                     if(!GetOpenFileName(&ofn)) return FALSE;
 
@@ -138,8 +147,8 @@ BOOL CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 					bp.hwndOwner=dialog;
 					bp.pidlRoot=NULL;
 					bp.pszDisplayName=NULL;
-					bp.lpszTitle="Select directory for Compact Flash";
-					bp.ulFlags=BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+					bp.lpszTitle="Select directory for FAT image building";
+					bp.ulFlags=BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
 					bp.lpfn=NULL;
 	
 					LPITEMIDLIST tmp = SHBrowseForFolder((LPBROWSEINFO)&bp);
@@ -162,14 +171,12 @@ BOOL CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 				{
 					if (HIWORD(wparam) == BN_CLICKED)
 					{
-						tmp_CFlashUsePath = FALSE;
+						tmp_CFlashMode = ADDON_CFLASH_MODE_File;
 						EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), TRUE);
 						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), TRUE);
 
 						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), FALSE);
-						EnableWindow(GetDlgItem(dialog, IDC_PATHDESMUME), FALSE);
 						EnableWindow(GetDlgItem(dialog, IDC_PATH), FALSE);
-
 						if (!strlen(tmp_cflash_filename))
 							EnableWindow(OKbutton, FALSE);
 					}
@@ -180,47 +187,29 @@ BOOL CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 				{
 					if (HIWORD(wparam) == BN_CLICKED)
 					{
-						tmp_CFlashUsePath = TRUE;
+						tmp_CFlashMode = ADDON_CFLASH_MODE_Path;
 						EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), FALSE);
 						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), FALSE);
 
-						if (IsDlgButtonChecked(dialog, IDC_PATHDESMUME))
-						{
-							tmp_CFlashUseRomPath = TRUE;
-							EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), FALSE);
-							EnableWindow(GetDlgItem(dialog, IDC_PATH), FALSE);
-							EnableWindow(OKbutton, TRUE);
-						}
-						else
-						{
-							tmp_CFlashUseRomPath = FALSE;
-							EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), TRUE);
-							EnableWindow(GetDlgItem(dialog, IDC_PATH), TRUE);
-						}
-
-						EnableWindow(GetDlgItem(dialog, IDC_PATHDESMUME), TRUE);
+						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), TRUE);
+						EnableWindow(GetDlgItem(dialog, IDC_PATH), TRUE);
+						if (!strlen(tmp_cflash_path))
+							EnableWindow(OKbutton, FALSE);
 					}
 					break;
 				}
 
 				case IDC_PATHDESMUME:
 				{
-					if (IsDlgButtonChecked(dialog, IDC_PATHDESMUME))
+					if (HIWORD(wparam) == BN_CLICKED)
 					{
-						tmp_CFlashUseRomPath = TRUE;
+						tmp_CFlashMode = ADDON_CFLASH_MODE_RomPath;
+						EnableWindow(GetDlgItem(dialog, IDC_PATHIMG), FALSE);
+						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE), FALSE);
+
 						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), FALSE);
 						EnableWindow(GetDlgItem(dialog, IDC_PATH), FALSE);
 						EnableWindow(OKbutton, TRUE);
-					}
-					else
-					{
-						tmp_CFlashUseRomPath = FALSE;
-						EnableWindow(GetDlgItem(dialog, IDC_BBROWSE2), TRUE);
-						EnableWindow(GetDlgItem(dialog, IDC_PATH), TRUE);
-						if (strlen(tmp_cflash_path))
-							EnableWindow(OKbutton, TRUE);
-						else
-							EnableWindow(OKbutton, FALSE);
 					}
 					break;
 				}
@@ -231,7 +220,50 @@ BOOL CALLBACK GbaSlotCFlash(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 	return FALSE;
 }
 
-BOOL CALLBACK GbaSlotRumblePak(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+INT_PTR CALLBACK GbaSlotPaddle(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+{
+	int which = 0;
+
+	switch(msg)
+	{
+		case WM_INITDIALOG: 
+		{
+			_OKbutton = TRUE;
+			SendDlgItemMessage(dialog,IDC_PINC,WM_USER+44,tmp_Paddle.INC,0);
+			SendDlgItemMessage(dialog,IDC_PDEC,WM_USER+44,tmp_Paddle.DEC,0);
+
+			return TRUE;
+		}
+
+		case WM_USER+46:
+			SendDlgItemMessage(dialog,IDC_PINC,WM_USER+44,tmp_Paddle.INC,0);
+			SendDlgItemMessage(dialog,IDC_PDEC,WM_USER+44,tmp_Paddle.DEC,0);
+		return TRUE;
+
+		case WM_USER+43:
+			//MessageBox(hDlg,"USER+43 CAUGHT","moo",MB_OK);
+			which = GetDlgCtrlID((HWND)lparam);
+			switch(which)
+			{
+			case IDC_PINC:
+				tmp_Paddle.INC = wparam;
+
+				break;
+			case IDC_PDEC:
+				tmp_Paddle.DEC = wparam;
+
+				break;
+			}
+
+			SendDlgItemMessage(dialog,IDC_PINC,WM_USER+44,tmp_Paddle.INC,0);
+			SendDlgItemMessage(dialog,IDC_PDEC,WM_USER+44,tmp_Paddle.DEC,0);
+			PostMessage(dialog,WM_NEXTDLGCTL,0,0);
+		return true;
+	}
+	return FALSE;
+}
+
+INT_PTR CALLBACK GbaSlotRumblePak(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 {
 	switch(msg)
 	{
@@ -244,7 +276,7 @@ BOOL CALLBACK GbaSlotRumblePak(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam
 	return FALSE;
 }
 
-BOOL CALLBACK GbaSlotGBAgame(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+INT_PTR CALLBACK GbaSlotGBAgame(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 {
 	switch(msg)
 	{
@@ -262,26 +294,23 @@ BOOL CALLBACK GbaSlotGBAgame(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 					{
 							int filterSize = 0, i = 0;
                             OPENFILENAME ofn;
-                            char filename[MAX_PATH] = "",
-								 fileFilter[512]="";
+                            char filename[MAX_PATH] = "";
                             
                             ZeroMemory(&ofn, sizeof(ofn));
                             ofn.lStructSize = sizeof(ofn);
                             ofn.hwndOwner = dialog;
 
-							// TODO: add another gba file formats and archs
-							strncpy (fileFilter, "GameBoy Advance ROM (*.gba)|*.gba||",512 - strlen(fileFilter));
-							strncat (fileFilter, "Any file (*.*)|*.*||",512 - strlen(fileFilter));
+							// TODO: add another gba file formats and archs (??wtf??)
+							const char* fileFilter =	"GameBoy Advance ROM (*.gba)\0*.gba\0"
+														"NDS ROM (for nitroFS roms) (*.nds,*.srl)\0*.nds;*.srl\0"
+														"Any file (*.*)\0*.*\0";
 							
-							filterSize = strlen(fileFilter);
-							for (i = 0; i < filterSize; i++)
-								if (fileFilter[i] == '|')	fileFilter[i] = '\0';
                             ofn.lpstrFilter = fileFilter;
                             ofn.nFilterIndex = 1;
                             ofn.lpstrFile =  filename;
                             ofn.nMaxFile = MAX_PATH;
                             ofn.lpstrDefExt = "gba";
-							ofn.Flags = OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+							ofn.Flags = OFN_NOCHANGEDIR | OFN_FILEMUSTEXIST;
                             
                             if(!GetOpenFileName(&ofn)) return FALSE;
 
@@ -300,18 +329,168 @@ BOOL CALLBACK GbaSlotGBAgame(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 	return FALSE;
 }
 
-u32		GBAslot_IDDs[NDS_ADDON_COUNT] = {
+INT_PTR CALLBACK GbaSlotGuitarGrip(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+{
+	int which = 0;
+
+	switch(msg)
+	{
+		case WM_INITDIALOG: 
+		{
+			_OKbutton = TRUE;
+			SendDlgItemMessage(dialog,IDC_GGREEN,WM_USER+44,tmp_Guitar.GREEN,0);
+			SendDlgItemMessage(dialog,IDC_GRED,WM_USER+44,tmp_Guitar.RED,0);
+			SendDlgItemMessage(dialog,IDC_GYELLOW,WM_USER+44,tmp_Guitar.YELLOW,0);
+			SendDlgItemMessage(dialog,IDC_GBLUE,WM_USER+44,tmp_Guitar.BLUE,0);
+
+			return TRUE;
+		}
+
+		case WM_USER+46:
+			SendDlgItemMessage(dialog,IDC_GGREEN,WM_USER+44,tmp_Guitar.GREEN,0);
+			SendDlgItemMessage(dialog,IDC_GRED,WM_USER+44,tmp_Guitar.RED,0);
+			SendDlgItemMessage(dialog,IDC_GYELLOW,WM_USER+44,tmp_Guitar.YELLOW,0);
+			SendDlgItemMessage(dialog,IDC_GBLUE,WM_USER+44,tmp_Guitar.BLUE,0);
+		return TRUE;
+
+		case WM_USER+43:
+			//MessageBox(hDlg,"USER+43 CAUGHT","moo",MB_OK);
+			which = GetDlgCtrlID((HWND)lparam);
+			switch(which)
+			{
+			case IDC_GGREEN:
+				tmp_Guitar.GREEN = wparam;
+
+				break;
+			case IDC_GRED:
+				tmp_Guitar.RED = wparam;
+
+				break;
+			case IDC_GYELLOW:
+				tmp_Guitar.YELLOW = wparam;
+
+				break;
+			case IDC_GBLUE:
+				tmp_Guitar.BLUE = wparam;
+				break;
+			}
+
+			SendDlgItemMessage(dialog,IDC_GGREEN,WM_USER+44,tmp_Guitar.GREEN,0);
+			SendDlgItemMessage(dialog,IDC_GRED,WM_USER+44,tmp_Guitar.RED,0);
+			SendDlgItemMessage(dialog,IDC_GYELLOW,WM_USER+44,tmp_Guitar.YELLOW,0);
+			SendDlgItemMessage(dialog,IDC_GBLUE,WM_USER+44,tmp_Guitar.BLUE,0);
+			PostMessage(dialog,WM_NEXTDLGCTL,0,0);
+		return true;
+	}
+	return FALSE;
+}
+
+INT_PTR CALLBACK GbaSlotPiano(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
+{
+	int which = 0;
+
+	switch(msg)
+	{
+		case WM_INITDIALOG: 
+		{
+			_OKbutton = TRUE;
+			SendDlgItemMessage(dialog,IDC_PIANO_C,WM_USER+44,tmp_Piano.C,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_CS,WM_USER+44,tmp_Piano.CS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_D,WM_USER+44,tmp_Piano.D,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_DS,WM_USER+44,tmp_Piano.DS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_E,WM_USER+44,tmp_Piano.E,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_F,WM_USER+44,tmp_Piano.F,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_FS,WM_USER+44,tmp_Piano.FS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_G,WM_USER+44,tmp_Piano.G,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_GS,WM_USER+44,tmp_Piano.GS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_A,WM_USER+44,tmp_Piano.A,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_AS,WM_USER+44,tmp_Piano.AS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_B,WM_USER+44,tmp_Piano.B,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_HIC,WM_USER+44,tmp_Piano.HIC,0);
+
+			return TRUE;
+		}
+
+		case WM_USER+46:
+			SendDlgItemMessage(dialog,IDC_PIANO_C,WM_USER+44,tmp_Piano.C,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_CS,WM_USER+44,tmp_Piano.CS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_D,WM_USER+44,tmp_Piano.D,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_DS,WM_USER+44,tmp_Piano.DS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_E,WM_USER+44,tmp_Piano.E,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_F,WM_USER+44,tmp_Piano.F,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_FS,WM_USER+44,tmp_Piano.FS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_G,WM_USER+44,tmp_Piano.G,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_GS,WM_USER+44,tmp_Piano.GS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_A,WM_USER+44,tmp_Piano.A,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_AS,WM_USER+44,tmp_Piano.AS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_B,WM_USER+44,tmp_Piano.B,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_HIC,WM_USER+44,tmp_Piano.HIC,0);
+		return TRUE;
+
+		case WM_USER+43:
+			//MessageBox(hDlg,"USER+43 CAUGHT","moo",MB_OK);
+			which = GetDlgCtrlID((HWND)lparam);
+			switch(which)
+			{
+			case IDC_PIANO_C: tmp_Piano.C = wparam; break;
+			case IDC_PIANO_CS: tmp_Piano.CS = wparam; break;
+			case IDC_PIANO_D: tmp_Piano.D = wparam; break;
+			case IDC_PIANO_DS: tmp_Piano.DS = wparam; break;
+			case IDC_PIANO_E: tmp_Piano.E = wparam; break;
+			case IDC_PIANO_F: tmp_Piano.F = wparam; break;
+			case IDC_PIANO_FS: tmp_Piano.FS = wparam; break;
+			case IDC_PIANO_G: tmp_Piano.G = wparam; break;
+			case IDC_PIANO_GS: tmp_Piano.GS = wparam; break;
+			case IDC_PIANO_A: tmp_Piano.A = wparam; break;
+			case IDC_PIANO_AS: tmp_Piano.AS = wparam; break;
+			case IDC_PIANO_B: tmp_Piano.B = wparam; break;
+			case IDC_PIANO_HIC: tmp_Piano.HIC = wparam; break;
+
+			}
+
+			SendDlgItemMessage(dialog,IDC_PIANO_C,WM_USER+44,tmp_Piano.C,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_CS,WM_USER+44,tmp_Piano.CS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_D,WM_USER+44,tmp_Piano.D,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_DS,WM_USER+44,tmp_Piano.DS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_E,WM_USER+44,tmp_Piano.E,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_F,WM_USER+44,tmp_Piano.F,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_FS,WM_USER+44,tmp_Piano.FS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_G,WM_USER+44,tmp_Piano.G,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_GS,WM_USER+44,tmp_Piano.GS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_A,WM_USER+44,tmp_Piano.A,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_AS,WM_USER+44,tmp_Piano.AS,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_B,WM_USER+44,tmp_Piano.B,0);
+			SendDlgItemMessage(dialog,IDC_PIANO_HIC,WM_USER+44,tmp_Piano.HIC,0);
+			PostMessage(dialog,WM_NEXTDLGCTL,0,0);
+		return true;
+	}
+	return FALSE;
+}
+
+u32		GBAslot_IDDs[NDS_SLOT2_COUNT] = {
+	IDD_GBASLOT_NONE,
 	IDD_GBASLOT_NONE,
 	IDD_GBASLOT_CFLASH,
 	IDD_GBASLOT_RUMBLEPAK,
-	IDD_GBASLOT_GBAGAME
+	IDD_GBASLOT_GBAGAME,
+	IDD_GBASLOT_GUITARGRIP,
+	IDD_GBASLOT_NONE, //expmem
+	IDD_GBASLOT_PIANO,
+	IDD_GBASLOT_PADDLE, //paddle
+	IDD_GBASLOT_NONE, //PassME
 };
 
-DLGPROC GBAslot_Procs[NDS_ADDON_COUNT] = {
+DLGPROC GBAslot_Procs[NDS_SLOT2_COUNT] = {
+	GbaSlotNone,
 	GbaSlotNone,
 	GbaSlotCFlash,
 	GbaSlotRumblePak,
-	GbaSlotGBAgame
+	GbaSlotGBAgame,
+	GbaSlotGuitarGrip,
+	GbaSlotNone,  //expmem
+	GbaSlotPiano,
+	GbaSlotPaddle,
+	GbaSlotNone			// PassME
 };
 
 
@@ -323,15 +502,13 @@ BOOL CALLBACK GbaSlotBox_Proc(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 		case WM_INITDIALOG: 
 		{
 			OKbutton = GetDlgItem(dialog, IDOK);
-			for(int i = 0; i < NDS_ADDON_COUNT; i++)
-				ComboBox_AddString(GetDlgItem(dialog, IDC_ADDONS_LIST), addonList[i].name);
+			for(int i = 0; i < NDS_SLOT2_COUNT; i++)
+				ComboBox_AddString(GetDlgItem(dialog, IDC_ADDONS_LIST), slot2_List[i]->info()->name());
 			ComboBox_SetCurSel(GetDlgItem(dialog, IDC_ADDONS_LIST), temp_type);
-			u8 tmp_info[512];
-			addonList[temp_type].info((char *)tmp_info);
-			SetWindowText(GetDlgItem(dialog, IDC_ADDONS_INFO), (char *)tmp_info);
+			SetWindowText(GetDlgItem(dialog, IDC_ADDONS_INFO), slot2_List[temp_type]->info()->descr());
 
 			_OKbutton = false;
-			wndConfig=CreateDialog(hAppInst, MAKEINTRESOURCE(GBAslot_IDDs[temp_type]), 
+			wndConfig=CreateDialogW(hAppInst, MAKEINTRESOURCEW(GBAslot_IDDs[temp_type]), 
 										dialog, (DLGPROC)GBAslot_Procs[temp_type]);
 			if ( (temp_type == 0) || (_OKbutton) )
 				EnableWindow(OKbutton, TRUE);
@@ -346,18 +523,8 @@ BOOL CALLBACK GbaSlotBox_Proc(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 			{
 				case IDOK:
 					{
-						int Msg = IDYES;
-						if (romloaded)
-						{
-							int Msg = MessageBox(dialog, 
-									"After change GBA slot pak game will reset!\nAre you sure to continue?", "DeSmuME",
-									MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2);
-						}
-						if (Msg == IDYES)
-						{
-							if (wndConfig) DestroyWindow(wndConfig);
-							EndDialog(dialog, TRUE);
-						}
+						if (wndConfig) DestroyWindow(wndConfig);
+						EndDialog(dialog, TRUE);
 					}
 				return TRUE;
 				case IDCANCEL:
@@ -373,16 +540,14 @@ BOOL CALLBACK GbaSlotBox_Proc(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 						{
 							if (wndConfig) DestroyWindow(wndConfig);
 							_OKbutton = false;
-							wndConfig=CreateDialog(hAppInst, 
-								MAKEINTRESOURCE(GBAslot_IDDs[temp_type]), dialog, 
+							wndConfig=CreateDialogW(hAppInst, 
+								MAKEINTRESOURCEW(GBAslot_IDDs[temp_type]), dialog, 
 								(DLGPROC)GBAslot_Procs[temp_type]);
 							if ( (temp_type == 0) || (_OKbutton) )
 								EnableWindow(OKbutton, TRUE);
 							else
 								EnableWindow(OKbutton, FALSE);
-							u8 tmp_info[512];
-							addonList[temp_type].info((char *)tmp_info);
-							SetWindowText(GetDlgItem(dialog, IDC_ADDONS_INFO), (char *)tmp_info);
+							SetWindowText(GetDlgItem(dialog, IDC_ADDONS_INFO), slot2_List[temp_type]->info()->descr());
 							last_type = temp_type;
 						}
 					}
@@ -396,52 +561,89 @@ BOOL CALLBACK GbaSlotBox_Proc(HWND dialog, UINT msg,WPARAM wparam,LPARAM lparam)
 
 void GBAslotDialog(HWND hwnd)
 {
-	temp_type = addon_type;
+	temp_type = (u8)slot2_GetCurrentType();
 	last_type = temp_type;
-	strcpy(tmp_cflash_filename, CFlashName);
-	strcpy(tmp_cflash_path, CFlashPath);
-	strcpy(tmp_gbagame_filename, GBAgameName);
-	tmp_CFlashUseRomPath = CFlashUseRomPath;
-	tmp_CFlashUsePath = CFlashUsePath;
+	strcpy(tmp_cflash_filename, win32_CFlash_cfgFileName.c_str());
+	strcpy(tmp_cflash_path, win32_CFlash_cfgDirectory.c_str());
+	strcpy(tmp_gbagame_filename, win32_GBA_cfgRomPath.c_str());
+	memcpy(&tmp_Guitar, &Guitar, sizeof(Guitar));
+	memcpy(&tmp_Piano, &Piano, sizeof(Piano));
+	memcpy(&tmp_Paddle, &Paddle, sizeof(Paddle));
+	tmp_CFlashMode = CFlash_Mode;
 	_OKbutton = false;
-	u32 res=DialogBox(hAppInst, MAKEINTRESOURCE(IDD_GBASLOT), hwnd, (DLGPROC) GbaSlotBox_Proc);
+	
+	u32 res=DialogBoxW(hAppInst, MAKEINTRESOURCEW(IDD_GBASLOT), hwnd, (DLGPROC) GbaSlotBox_Proc);
 	if (res)
 	{
 		switch (temp_type)
 		{
-			case NDS_ADDON_NONE:
+			case NDS_SLOT2_NONE:
+			break;
+
+			case NDS_SLOT2_AUTO:
+			break;
+
+			case NDS_SLOT2_CFLASH:
+				//save current values for win32 configuration
+				win32_CFlash_cfgMode = tmp_CFlashMode;
+				win32_CFlash_cfgDirectory = tmp_cflash_path;
+				win32_CFlash_cfgFileName = tmp_cflash_filename;
+				WritePrivateProfileInt("Slot2.CFlash","fileMode",tmp_CFlashMode,IniName);
+				WritePrivateProfileString("Slot2.CFlash","path",tmp_cflash_path,IniName);
+				WritePrivateProfileString("Slot2.CFlash","filename",tmp_cflash_filename,IniName);
+
+				WIN_InstallCFlash();
 				break;
-			case NDS_ADDON_CFLASH:
-				CFlashUsePath = tmp_CFlashUsePath;
-				WritePrivateProfileInt("GBAslot.CFlash","usePath",CFlashUsePath,IniName);
-				if (tmp_CFlashUsePath)
-				{
-					if (tmp_CFlashUseRomPath)
-					{
-						CFlashUseRomPath = tmp_CFlashUseRomPath;
-						WritePrivateProfileInt("GBAslot.CFlash","useRomPath",CFlashUseRomPath,IniName);
-						break;
-					}
-					strcpy(CFlashPath, tmp_cflash_path);
-					WritePrivateProfileString("GBAslot.CFlash","path",CFlashPath,IniName);
-					break;
-				}
-				strcpy(CFlashName, tmp_cflash_filename);
-				WritePrivateProfileString("GBAslot.CFlash","filename",CFlashName,IniName);
+			case NDS_SLOT2_RUMBLEPAK:
 				break;
-			case NDS_ADDON_RUMBLEPAK:
+			case NDS_SLOT2_PADDLE:
+				memcpy(&Paddle, &tmp_Paddle, sizeof(tmp_Paddle));
+				WritePrivateProfileInt("Slot2.Paddle","DEC",Paddle.DEC,IniName);
+				WritePrivateProfileInt("Slot2.Paddle","INC",Paddle.INC,IniName);
 				break;
-			case NDS_ADDON_GBAGAME:
-				strcpy(GBAgameName, tmp_gbagame_filename);
-				WritePrivateProfileString("GBAslot.GBAgame","filename",GBAgameName,IniName);
+			case NDS_SLOT2_GBACART:
+				win32_GBA_cfgRomPath = tmp_gbagame_filename;
+				WritePrivateProfileString("Slot2.GBAgame", "filename", tmp_gbagame_filename, IniName);
+				WIN_InstallGBACartridge();
+				break;
+			case NDS_SLOT2_GUITARGRIP:
+				memcpy(&Guitar, &tmp_Guitar, sizeof(tmp_Guitar));
+				WritePrivateProfileInt("Slot2.GuitarGrip","green",Guitar.GREEN,IniName);
+				WritePrivateProfileInt("Slot2.GuitarGrip","red",Guitar.RED,IniName);
+				WritePrivateProfileInt("Slot2.GuitarGrip","yellow",Guitar.YELLOW,IniName);
+				WritePrivateProfileInt("Slot2.GuitarGrip","blue",Guitar.BLUE,IniName);
+				break;
+			case NDS_SLOT2_EASYPIANO:
+				memcpy(&Piano, &tmp_Piano, sizeof(tmp_Piano));
+				WritePrivateProfileInt("Slot2.Piano","C",Piano.C,IniName);
+				WritePrivateProfileInt("Slot2.Piano","CS",Piano.CS,IniName);
+				WritePrivateProfileInt("Slot2.Piano","D",Piano.D,IniName);
+				WritePrivateProfileInt("Slot2.Piano","DS",Piano.DS,IniName);
+				WritePrivateProfileInt("Slot2.Piano","E",Piano.E,IniName);
+				WritePrivateProfileInt("Slot2.Piano","F",Piano.F,IniName);
+				WritePrivateProfileInt("Slot2.Piano","FS",Piano.FS,IniName);
+				WritePrivateProfileInt("Slot2.Piano","G",Piano.G,IniName);
+				WritePrivateProfileInt("Slot2.Piano","GS",Piano.GS,IniName);
+				WritePrivateProfileInt("Slot2.Piano","A",Piano.A,IniName);
+				WritePrivateProfileInt("Slot2.Piano","AS",Piano.AS,IniName);
+				WritePrivateProfileInt("Slot2.Piano","B",Piano.B,IniName);
+				WritePrivateProfileInt("Slot2.Piano","HIC",Piano.HIC,IniName);
+				break;
+			case NDS_SLOT2_EXPMEMORY:
+				break;
+			case NDS_SLOT2_PASSME:
 				break;
 			default:
 				return;
 		}
-		WritePrivateProfileInt("GBAslot","type",temp_type,IniName);
-		addon_type = temp_type;
-		addonsChangePak(addon_type);
-		if (romloaded)
-			NDS_Reset();
+
+		slot2_Change((NDS_SLOT2_TYPE)temp_type);
+
+		WritePrivateProfileInt("Slot2", "id", slot2_List[(u8)slot2_GetCurrentType()]->info()->id(), IniName);
+
+		Guitar.Enabled	= (slot2_GetCurrentType() == NDS_SLOT2_GUITARGRIP)?true:false;
+		Piano.Enabled	= (slot2_GetCurrentType() == NDS_SLOT2_EASYPIANO)?true:false;
+		Paddle.Enabled	= (slot2_GetCurrentType() == NDS_SLOT2_PADDLE)?true:false;
 	}
 }
+

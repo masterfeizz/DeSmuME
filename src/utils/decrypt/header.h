@@ -1,5 +1,5 @@
 //taken from ndstool
-//http://devkitpro.cvs.sourceforge.net/viewvc/devkitpro/tools/nds/ndstool/include/header.h?revision=1.14
+//http://devkitpro.svn.sourceforge.net/viewvc/devkitpro/trunk/tools/nds/ndstool/include/header.h?revision=2447
 
 /* header.h - this file is part of DeSmuME
  *
@@ -121,8 +121,11 @@ unsigned short CalcLogoCRC(Header &header);
 void FixHeaderCRC(char *ndsfilename);
 void ShowInfo(char *ndsfilename);
 int HashAndCompareWithList(char *filename, unsigned char sha1[]);
-int DetectRomType(const Header& header, char* romdata);
+int DetectRomType(const Header& header, char* secure);
 unsigned short CalcSecureAreaCRC(bool encrypt);
+
+bool CheckLogoCRC(void* bytes512);
+bool DetectAnyRom(void* bytes512);
 
 #define ROMTYPE_HOMEBREW	0
 #define ROMTYPE_MULTIBOOT	1

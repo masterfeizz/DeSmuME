@@ -1,127 +1,229 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
-    Copyright 2008 CrazyMax (mtabachenko)
-	Copyright (C) 2009 DeSmuME team
+/*
+	Copyright 2008-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "../common.h"
 #include <stdio.h>
 #include <fcntl.h>
 #include <io.h>
-#include "version.h"
 
+#include "../version.h"
+
+#include "main.h"
+#include "winutil.h"
 
 ///////////////////////////////////////////////////////////////// Console
-#if !defined(PUBLIC_RELEASE) || defined(DEVELOPER)
 #define BUFFER_SIZE 100
-HANDLE hConsole = NULL;
+HANDLE	hConsoleOut = NULL;
+HANDLE	hConsoleIn = NULL;
+HWND	gConsoleWnd = NULL;
+DWORD	oldmode = 0;
 void printlog(const char *fmt, ...);
+
+std::wstring SkipEverythingButProgramInCommandLine(wchar_t* cmdLine)
+{
+	//skip past the program name. can anyone think of a better way to do this?
+	//we could use CommandLineToArgvW (commented out below) but then we would just have to re-assemble and potentially re-quote it
+	//NOTE - this objection predates this use of the code. its not such a bad objection now...
+	wchar_t* childCmdLine = cmdLine;
+	wchar_t* lastSlash = cmdLine;
+	wchar_t* lastGood = cmdLine;
+	bool quote = false;
+	for(;;)
+	{
+		wchar_t cur = *childCmdLine;
+		if(cur == 0) break;
+		childCmdLine++;
+		bool thisIsQuote = (cur == '\"');
+		if(cur == '\\' || cur == '/')
+			lastSlash = childCmdLine;
+		if(quote)
+		{
+			if(thisIsQuote)
+				quote = false;
+			else lastGood = childCmdLine;
+		}
+		else
+		{
+			if(cur == ' ' || cur == '\t')
+				break;
+			if(thisIsQuote)
+				quote = true;
+			lastGood = childCmdLine;
+		}
+	}
+	std::wstring remainder = ((std::wstring)cmdLine).substr(childCmdLine-cmdLine);
+	std::wstring path = ((std::wstring)cmdLine).substr(lastSlash-cmdLine,(lastGood-cmdLine)-(lastSlash-cmdLine));
+	return path + L" " + remainder;
+}
+
+BOOL WINAPI HandlerRoutine(DWORD dwCtrlType)
+{
+	return ((dwCtrlType == CTRL_C_EVENT) || (dwCtrlType == CTRL_BREAK_EVENT));
+}
+
+void readConsole()
+{
+	INPUT_RECORD buf[10];
+	DWORD num = 0;
+	if (PeekConsoleInput(hConsoleIn, buf, 10, &num))
+	{
+		if (num)
+		{
+			for (u32 i = 0; i < num; i++)
+			{
+				if ((buf[i].EventType == KEY_EVENT) && (buf[i].Event.KeyEvent.bKeyDown) && (buf[i].Event.KeyEvent.wVirtualKeyCode == VK_PAUSE))
+				{
+					if (execute)
+						NDS_Pause(false);
+					else
+						NDS_UnPause(false);
+					break;
+				}
+			}
+			FlushConsoleInputBuffer(hConsoleIn);
+		}
+	}
+}
 
 void OpenConsole() 
 {
-	COORD csize;
-	CONSOLE_SCREEN_BUFFER_INFO csbiInfo; 
-	SMALL_RECT srect;
-	char buf[256];
+	//dont do anything if we're already analyzed
+	if (hConsoleOut) return;
 
-	//dont do anything if we're already attached
-	if (hConsole) return;
+	hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+	DWORD fileType = GetFileType(hConsoleOut);
+	//is FILE_TYPE_UNKNOWN (0) with no redirect
+	//is FILE_TYPE_DISK (1) for redirect to file
+	//is FILE_TYPE_PIPE (3) for pipe
+	//i think it is FILE_TYPE_CHAR (2) for console
 
-	//attach to an existing console (if we can; this is circuitous because AttachConsole wasnt added until XP)
-	//remember to abstract this late bound function notion if we end up having to do this anywhere else
+	//SOMETHING LIKE THIS MIGHT BE NEEDED ONE DAY
+	//disable stdout buffering unless we know for sure we've been redirected to the disk
+	//the runtime will be smart and set buffering when we may have in fact chosen to pipe the output to a console and dont want it buffered
+	//if(GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_DISK) 
+	//	setvbuf(stdout,NULL,_IONBF,0);
+
+	//stdout is already connected to something. keep using it and dont let the console interfere
+	bool shouldRedirectStdout = fileType == FILE_TYPE_UNKNOWN;
 	bool attached = false;
-	HMODULE lib = LoadLibrary("kernel32.dll");
-	if(lib)
+	if (!AllocConsole())
 	{
-		typedef BOOL (WINAPI *_TAttachConsole)(DWORD dwProcessId);
-		_TAttachConsole _AttachConsole  = (_TAttachConsole)GetProcAddress(lib,"AttachConsole");
-		if(_AttachConsole)
+		HMODULE lib = LoadLibrary("kernel32.dll");
+		if(lib)
 		{
-			if(_AttachConsole(-1))
+			typedef BOOL (WINAPI *_TAttachConsoleOut)(DWORD dwProcessId);
+			_TAttachConsoleOut _AttachConsoleOut  = (_TAttachConsoleOut)GetProcAddress(lib,"AttachConsoleOut");
+			if(_AttachConsoleOut)
+			{
+				if(!_AttachConsoleOut(-1)) 
+				{
+					FreeLibrary(lib);
+					return;
+				}
 				attached = true;
+			}
+			FreeLibrary(lib);
 		}
-		FreeLibrary(lib);
 	}
-
-	//if we failed to attach, then alloc a new console
-	if(!attached)
+	else
 	{
-		AllocConsole();
+		SetConsoleCP(GetACP());
+		SetConsoleOutputCP(GetACP());
 	}
 
-	hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+	//newer and improved console title:
+	SetConsoleTitleW(SkipEverythingButProgramInCommandLine(GetCommandLineW()).c_str());
+	if(shouldRedirectStdout)
+	{
+		freopen("CONOUT$", "w", stdout);
+		freopen("CONOUT$", "w", stderr);
+		freopen("CONIN$", "r", stdin);
+	}
 
-	//redirect stdio
-	long lStdHandle = (long)hConsole;
-	int hConHandle = _open_osfhandle(lStdHandle, _O_TEXT);
-	if(hConHandle == -1)
-		return; //this fails from a visual studio command prompt
-	
-	FILE *fp = _fdopen( hConHandle, "w" );
-	*stdout = *fp;
-	//and stderr
-	*stderr = *fp;
+	SetConsoleCtrlHandler(HandlerRoutine, TRUE);
+	hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+	hConsoleIn = GetStdHandle(STD_INPUT_HANDLE);
+	GetConsoleMode(hConsoleIn, &oldmode);
+	SetConsoleMode(hConsoleIn, ENABLE_WINDOW_INPUT);
 
-	memset(buf,0,256);
-	sprintf(buf,"%s OUTPUT", DESMUME_NAME_AND_VERSION);
-	SetConsoleTitle(TEXT(buf));
-	csize.X = 60;
-	csize.Y = 800;
-	SetConsoleScreenBufferSize(GetStdHandle(STD_OUTPUT_HANDLE), csize);
-	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbiInfo);
-	srect = csbiInfo.srWindow;
-	srect.Right = srect.Left + 99;
-	srect.Bottom = srect.Top + 64;
-	SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE), TRUE, &srect);
-	SetConsoleCP(GetACP());
-	SetConsoleOutputCP(GetACP());
-	if(attached) printlog("\n");
-	printlog("%s\n",DESMUME_NAME_AND_VERSION);
-	printlog("- compiled: %s %s\n\n",__DATE__,__TIME__);
+	gConsoleWnd = GetConsoleWindow();
+	RECT pos = {0};
+	if (gConsoleWnd && GetWindowRect(gConsoleWnd, &pos))
+	{
+		LONG x		= std::max((LONG)0, pos.left);
+		LONG y		= std::max((LONG)0, pos.top);
+		LONG width	= std::max((LONG)0, (pos.right - pos.left));
+		LONG height	= std::max((LONG)0, (pos.bottom - pos.top));
 
+		x		= GetPrivateProfileInt("Console", "PosX",	x,		IniName);
+		y		= GetPrivateProfileInt("Console", "PosY",	y,		IniName);
+		width	= GetPrivateProfileInt("Console", "Width",	width,	IniName);
+		height	= GetPrivateProfileInt("Console", "Height",	height,	IniName);
 
+		if (x < 0) x = 0;
+		if (y < 0) y = 0;
+		if (width < 200) width = 200;
+		if (height < 100) height = 100;
+
+		HWND desktop = GetDesktopWindow(); 
+		if (desktop && GetClientRect(desktop, &pos))
+		{
+			if (x >= pos.right) x = 0;
+			if (y >= pos.bottom) y = 0;
+		}
+
+		SetWindowPos(gConsoleWnd, NULL, x, y, width, height, SWP_NOACTIVATE);
+	}
+
+	printlog("%s\n", EMU_DESMUME_NAME_AND_VERSION());
+	printlog("- compiled: %s %s\n", __DATE__, __TIME__);
+	if(attached) 
+		printf("\nuse cmd /c desmume.exe to get more sensible console behaviour\n");
+	printlog("\n");
 }
 
-void CloseConsole() {
-	if (hConsole == NULL) return;
-	printlog("Closing...");
-	FreeConsole(); 
-	hConsole = NULL;
+void CloseConsole()
+{
+	RECT pos = {0};
+	SetConsoleMode(hConsoleIn, oldmode);
+
+	if (gConsoleWnd && GetWindowRect(gConsoleWnd, &pos))
+	{
+		LONG width	= std::max((LONG)0, (pos.right - pos.left));
+		LONG height	= std::max((LONG)0, (pos.bottom - pos.top));
+		WritePrivateProfileInt("Console", "PosX",	pos.left, IniName);
+		WritePrivateProfileInt("Console", "PosY",	pos.top, IniName);
+		WritePrivateProfileInt("Console", "Width",	width, IniName);
+		WritePrivateProfileInt("Console", "Height",	height, IniName);
+	}
+
+	FreeConsole();
+	hConsoleOut = NULL;
+}
+
+void ConsoleAlwaysTop(bool top)
+{
+	if (!gConsoleWnd) return;
+	SetWindowPos(gConsoleWnd, (top?HWND_TOPMOST:HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
 }
 
 void printlog(const char *fmt, ...)
 {
-	va_list list;
-	char msg[512];
-	DWORD tmp;
-
-	memset(msg,0,512);
-
-	va_start(list,fmt);
-		_vsnprintf(msg,511,fmt,list);
-	va_end(list);
-	WriteConsole(hConsole,msg, (DWORD)strlen(msg), &tmp, 0);
+	va_list args;
+	va_start (args, fmt);
+	vprintf (fmt, args);
+	va_end (args);
 }
-#else
-
-void OpenConsole() {}
-void CloseConsole() {}
-
-#endif

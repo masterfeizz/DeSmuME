@@ -1,37 +1,35 @@
-///*  This file is part of DeSmuME, derived from several files in Snes9x 1.51 which are 
-//    licensed under the terms supplied at the end of this file (for the terms are very long!)
-//    Differences from that baseline version are:
-//
-//    Copyright (C) 2009 DeSmuME team
-//
-//    DeSmuME is free software; you can redistribute it and/or modify
-//    it under the terms of the GNU General Public License as published by
-//    the Free Software Foundation; either version 2 of the License, or
-//    (at your option) any later version.
-//
-//    DeSmuME is distributed in the hope that it will be useful,
-//    but WITHOUT ANY WARRANTY; without even the implied warranty of
-//    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//    GNU General Public License for more details.
-//
-//    You should have received a copy of the GNU General Public License
-//    along with DeSmuME; if not, write to the Free Software
-//    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-//*/
+/*
+	This file is part of DeSmuME, derived from several files in Snes9x 1.51 which are 
+	licensed under the terms supplied at the end of this file (for the terms are very long!)
+	Differences from that baseline version are:
 
+	Copyright (C) 2009-2015 DeSmuME team
 
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+//TODO - rumble is broken. hopefully nobody will notice
+
+#include "inputdx.h"
 
 #ifdef __MINGW32__
 #define _WIN32_IE 0x0501
 #define _WIN32_WINNT 0x0501
 #endif
 
-#define STRICT
-#include <winsock2.h>
-#include <windows.h>
 #include <tchar.h>
 #include <io.h>
-
 #include <string>
 
 #if (((defined(_MSC_VER) && _MSC_VER >= 1300)) || defined(__MINGW32__))
@@ -43,44 +41,44 @@
 	#include <fstream.h>
 #endif
 
-#include "inputdx.h"
-#include "hotkey.h"
-
-#include "main.h"
-#include "resource.h"
-#include "common.h"
-#include "../addons.h"
-#include "../NDSSystem.h"
-
-#define DIRECTINPUT_VERSION 0x0800
-#include "../common.h"
 #include "../types.h"
-#include "directx/dinput.h"
+#include "../common.h"
+#include "../NDSSystem.h"
+#include "../slot2.h"
+#include "../debug.h"
+
+#include "resource.h"
+#include "hotkey.h"
+#include "main.h"
+#include "winutil.h"
 
 // Gamepad Dialog Strings
-#define INPUTCONFIG_TITLE "Input Configuration"
+// Support Unicode display
+//#define INPUTCONFIG_TITLE "Input Configuration"
 #define INPUTCONFIG_JPTOGGLE "Enabled"
 //#define INPUTCONFIG_DIAGTOGGLE "Toggle Diagonals"
 //#define INPUTCONFIG_OK "&OK"
 //#define INPUTCONFIG_CANCEL "&Cancel"
 #define INPUTCONFIG_JPCOMBO "Joypad #%d"
-#define INPUTCONFIG_LABEL_UP "Up"
-#define INPUTCONFIG_LABEL_DOWN "Down"
-#define INPUTCONFIG_LABEL_LEFT "Left"
-#define INPUTCONFIG_LABEL_RIGHT "Right"
-#define INPUTCONFIG_LABEL_A "A"
-#define INPUTCONFIG_LABEL_B "B"
-#define INPUTCONFIG_LABEL_X "X"
-#define INPUTCONFIG_LABEL_Y "Y"
-#define INPUTCONFIG_LABEL_L "L"
-#define INPUTCONFIG_LABEL_R "R"
-#define INPUTCONFIG_LABEL_START "Start"
-#define INPUTCONFIG_LABEL_SELECT "Select"
-#define INPUTCONFIG_LABEL_UPLEFT "Up Left"
-#define INPUTCONFIG_LABEL_UPRIGHT "Up Right"
-#define INPUTCONFIG_LABEL_DOWNRIGHT "Dn Right"
-#define INPUTCONFIG_LABEL_DOWNLEFT "Dn Left"
-#define INPUTCONFIG_LABEL_BLUE "Blue means the button is already mapped.\nPink means it conflicts with a custom hotkey.\nRed means it's reserved by Windows.\nButtons can be disabled using Escape.\nGrayed buttons arent supported yet (sorry!)"
+// Support Unicode display
+#define INPUTCONFIG_LABEL_UP IDC_LABEL_UP
+#define INPUTCONFIG_LABEL_DOWN IDC_LABEL_DOWN
+#define INPUTCONFIG_LABEL_LEFT IDC_LABEL_LEFT
+#define INPUTCONFIG_LABEL_RIGHT IDC_LABEL_RIGHT
+#define INPUTCONFIG_LABEL_A IDC_LABEL_A
+#define INPUTCONFIG_LABEL_B IDC_LABEL_B
+#define INPUTCONFIG_LABEL_X IDC_LABEL_X
+#define INPUTCONFIG_LABEL_Y IDC_LABEL_Y
+#define INPUTCONFIG_LABEL_L IDC_LABEL_L
+#define INPUTCONFIG_LABEL_R IDC_LABEL_R
+#define INPUTCONFIG_LABEL_START IDC_LABEL_START
+#define INPUTCONFIG_LABEL_SELECT IDC_LABEL_SELECT
+#define INPUTCONFIG_LABEL_UPLEFT IDC_LABEL_UPLEFT
+#define INPUTCONFIG_LABEL_UPRIGHT IDC_LABEL_UPRIGHT
+#define INPUTCONFIG_LABEL_DOWNRIGHT IDC_LABEL_DOWNRIGHT
+#define INPUTCONFIG_LABEL_DOWNLEFT IDC_LABEL_DOWNLEFT
+#define INPUTCONFIG_LABEL_BLUE IDC_LABEL_BLUE //"Blue means the button is already mapped.\nPink means it conflicts with a custom hotkey.\nRed means it's reserved by Windows.\nButtons can be disabled using Escape.\nGrayed buttons arent supported yet (sorry!)"
+
 #define INPUTCONFIG_LABEL_UNUSED ""
 #define INPUTCONFIG_LABEL_CLEAR_TOGGLES_AND_TURBO "Clear All"
 #define INPUTCONFIG_LABEL_MAKE_TURBO "TempTurbo"
@@ -93,7 +91,8 @@
 #define HOTKEYS_CONTROL_MOD "Ctrl + "
 #define HOTKEYS_SHIFT_MOD "Shift + "
 #define HOTKEYS_ALT_MOD "Alt + "
-#define HOTKEYS_LABEL_BLUE "Blue means the hotkey is already mapped.\nPink means it conflicts with a game button.\nRed means it's reserved by Windows.\nA hotkey can be disabled using Escape."
+// Support Unicode display
+#define HOTKEYS_LABEL_BLUE IDC_LABEL_BLUE1 //"Blue means the hotkey is already mapped.\nPink means it conflicts with a game button.\nRed means it's reserved by Windows.\nA hotkey can be disabled using Escape."
 #define HOTKEYS_HKCOMBO "Page %d"
 
 // gaming buttons and axes
@@ -111,8 +110,8 @@
 #define GAMEDEVICE_POVDNRIGHT "POV Dn Right"
 #define GAMEDEVICE_POVUPLEFT  "POV Up Left"
 #define GAMEDEVICE_POVUPRIGHT "POV Up Right"
-#define GAMEDEVICE_ZPOS "Z Up"
-#define GAMEDEVICE_ZNEG "Z Down"
+#define GAMEDEVICE_ZPOS "Z +"
+#define GAMEDEVICE_ZNEG "Z -"
 #define GAMEDEVICE_RPOS "R Up"
 #define GAMEDEVICE_RNEG "R Down"
 #define GAMEDEVICE_UPOS "U Up"
@@ -120,6 +119,13 @@
 #define GAMEDEVICE_VPOS "V Up"
 #define GAMEDEVICE_VNEG "V Down"
 #define GAMEDEVICE_BUTTON "Button %d"
+
+#define GAMEDEVICE_XROTPOS "X Rot Up"
+#define GAMEDEVICE_XROTNEG "X Rot Down"
+#define GAMEDEVICE_YROTPOS "Y Rot Up"
+#define GAMEDEVICE_YROTNEG "Y Rot Down"
+#define GAMEDEVICE_ZROTPOS "Z Rot Up"
+#define GAMEDEVICE_ZROTNEG "Z Rot Down"
 
 // gaming general
 #define GAMEDEVICE_DISABLED "Disabled"
@@ -193,14 +199,19 @@
 #define GAMEDEVICE_VK_F10 "F10"
 #define GAMEDEVICE_VK_F11 "F11"
 #define GAMEDEVICE_VK_F12 "F12"
-#define BUTTON_OK "&OK"
-#define BUTTON_CANCEL "&Cancel"
+// Support Unicode display
+#define BUTTON_OK L"&OK"
+#define BUTTON_CANCEL L"&Cancel"
 
 static TCHAR szClassName[] = _T("InputCustom");
 static TCHAR szHotkeysClassName[] = _T("InputCustomHot");
+static TCHAR szGuitarClassName[] = _T("InputCustomGuitar");
+static TCHAR szPaddleClassName[] = _T("InputCustomPaddle");
 
 static LRESULT CALLBACK InputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK HotInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK GuitarInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK PaddleInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 SJoyState Joystick [16];
 SJoyState JoystickF [16];
@@ -239,7 +250,21 @@ SJoypad DefaultJoypad[16] = {
 
 SJoypad Joypad[16];
 
-extern volatile BOOL paused;
+SGuitar Guitar;
+SGuitar DefaultGuitar = { false, 'E', 'R', 'T', 'Y' };
+
+SPiano Piano;
+SPiano DefaultPiano = { false, 'Z', 'S', 'X', 'D', 'C', 'V', 'G', 'B', 'H', 'N', 'J', 'M', VK_OEM_COMMA };
+
+SPaddle Paddle;
+SPaddle DefaultPaddle = { false, 'K', 'L' };
+
+bool killStylusTopScreen = false;
+bool killStylusOffScreen = false;
+bool allowUpAndDown = false;
+bool allowBackgroundInput = false;
+
+extern volatile bool paused;
 
 #define MAXKEYPAD 15
 
@@ -267,18 +292,16 @@ typedef char TcDIBuf[512];
 
 TcDIBuf					cDIBuf;
 LPDIRECTINPUT8			pDI;
-LPDIRECTINPUTDEVICE8	pJoystick;
 DIDEVCAPS				DIJoycap;
-LPDIRECTINPUTEFFECT     pEffect;
-char	JoystickName[255];
-BOOL	Feedback;
-
 
 static LPDIRECTINPUT8		tmp_pDI = NULL;
-static BOOL					tmp_Feedback = FALSE;
 static char					tmp_device_name[255] = { 0 };
 static LPDIRECTINPUTDEVICE8 tmp_Device = NULL;
 static LPDIRECTINPUTDEVICE8 tmp_Joystick = NULL;
+
+std::vector<LPDIRECTINPUTDEVICE8> joyDevices;
+std::vector<std::string> joyDeviceNames;
+std::vector<bool> joyDeviceFeedback;
 
 BOOL CALLBACK EnumCallback(LPCDIDEVICEINSTANCE lpddi, LPVOID pvRef)
 {
@@ -288,25 +311,21 @@ BOOL CALLBACK EnumCallback(LPCDIDEVICEINSTANCE lpddi, LPVOID pvRef)
 		return DIENUM_CONTINUE;
 	}
 
-	strcpy(tmp_device_name, lpddi->tszProductName);
-	if (lpddi->guidFFDriver.Data1) tmp_Feedback = TRUE;
-	return DIENUM_STOP;
+	joyDevices.push_back(tmp_Device);
+	joyDeviceNames.push_back(lpddi->tszProductName);
+	if (lpddi->guidFFDriver.Data1) joyDeviceFeedback.push_back(true);
+	else joyDeviceFeedback.push_back(false);
+	return DIENUM_CONTINUE;
 }
 
 
-LPDIRECTINPUTDEVICE8 EnumDevices(LPDIRECTINPUT8 pDI)
+static void EnumDevices(LPDIRECTINPUT8 pDI)
 {
 	tmp_pDI = pDI;
-	tmp_Feedback = FALSE;
-	memset(tmp_device_name, 0, 255);
-	if( FAILED( pDI->EnumDevices(DI8DEVCLASS_GAMECTRL,
+	pDI->EnumDevices(DI8DEVCLASS_GAMECTRL,
 									EnumCallback,
 									NULL,
-									DIEDFL_ATTACHEDONLY) ) )
-			return NULL;
-	Feedback = tmp_Feedback;
-	strcpy(JoystickName, tmp_device_name);
-	return tmp_Device;
+									DIEDFL_ATTACHEDONLY);
 }
 
 BOOL CALLBACK EnumObjects(const DIDEVICEOBJECTINSTANCE* pdidoi,VOID* pContext)
@@ -345,7 +364,34 @@ static void ReadHotkey(const char* name, WORD& output)
 	}
 }
 
-static void LoadHotkeyConfig()
+static void ReadGuitarControl(const char* name, WORD& output)
+{
+	UINT temp;
+	temp = GetPrivateProfileInt("Slot2.GuitarGrip",name,-1,IniName);
+	if(temp != -1) {
+		output = temp;
+	}
+}
+
+static void ReadPianoControl(const char* name, WORD& output)
+{
+	UINT temp;
+	temp = GetPrivateProfileInt("Slot2.Piano",name,-1,IniName);
+	if(temp != -1) {
+		output = temp;
+	}
+}
+
+static void ReadPaddleControl(const char* name, WORD& output)
+{
+	UINT temp;
+	temp = GetPrivateProfileInt("Slot2.Paddle",name,-1,IniName);
+	if(temp != -1) {
+		output = temp;
+	}
+}
+
+void LoadHotkeyConfig()
 {
 	SCustomKey *key = &CustomKeys.key(0);
 
@@ -369,6 +415,45 @@ static void SaveHotkeyConfig()
 	}
 }
 
+static void LoadGuitarConfig()
+{
+	memcpy(&Guitar,&DefaultGuitar,sizeof(Guitar));
+
+	//Guitar.Enabled = true;
+#define DO(X) ReadGuitarControl(#X,Guitar.X);
+	DO(GREEN);
+	DO(RED);
+	DO(YELLOW);
+	DO(BLUE);
+#undef DO
+}
+
+static void LoadPianoConfig()
+{
+	memcpy(&Piano,&DefaultPiano,sizeof(Piano));
+
+	//Piano.Enabled = true;
+#define DO(X) ReadPianoControl(#X,Piano.X);
+	DO(C); DO(CS);
+	DO(D); DO(DS);
+	DO(E);
+	DO(F); DO(FS);
+	DO(G); DO(GS);
+	DO(A); DO(AS);
+	DO(B);
+	DO(HIC);
+#undef DO
+}
+
+static void LoadPaddleConfig()
+{
+	memcpy(&Paddle, &DefaultPaddle, sizeof(Paddle));
+
+	ReadPaddleControl("DEC", Paddle.DEC);
+	ReadPaddleControl("INC", Paddle.INC);
+}
+
+
 static void LoadInputConfig()
 {
 	memcpy(&Joypad,&DefaultJoypad,sizeof(Joypad));
@@ -383,6 +468,10 @@ static void LoadInputConfig()
 	DO(A); DO(B); DO(X); DO(Y);
 	DO(L); DO(R);
 #undef DO
+
+	allowUpAndDown = GetPrivateProfileInt("Controls","AllowUpAndDown",0,IniName) != 0;
+	allowBackgroundInput = GetPrivateProfileInt("Controls","AllowBackgroundInput",0,IniName) != 0;
+	killStylusTopScreen = GetPrivateProfileInt("Controls","KillStylusTopScreen",0,IniName) != 0;
 }
 
 static void WriteControl(char* name, WORD val)
@@ -400,6 +489,10 @@ static void SaveInputConfig()
 	DO(A); DO(B); DO(X); DO(Y);
 	DO(L); DO(R);
 #undef DO
+
+	WritePrivateProfileInt("Controls","AllowUpAndDown",allowUpAndDown?1:0,IniName);
+	WritePrivateProfileInt("Controls","KillStylusTopScreen",killStylusTopScreen?1:0,IniName);
+	WritePrivateProfileInt("Controls","KillStylusOffScreen",killStylusOffScreen?1:0,IniName);
 }
 
 BOOL di_init()
@@ -407,87 +500,96 @@ BOOL di_init()
 	HWND hParentWnd = MainWindow->getHWnd();
 
 	pDI = NULL;
-	pJoystick = NULL;
-	Feedback = FALSE;
 	memset(cDIBuf, 0, sizeof(cDIBuf));
-	memset(JoystickName, 0, sizeof(JoystickName));
 
 	if(FAILED(DirectInput8Create(GetModuleHandle(NULL),DIRECTINPUT_VERSION,IID_IDirectInput8,(void**)&pDI,NULL)))
 		return FALSE;
 
+	memset(&JoystickF,0,sizeof(JoystickF));
 
-	pJoystick = EnumDevices(pDI);
+	EnumDevices(pDI);
 
-	if (pJoystick)
-	{
-		if(!FAILED(pJoystick->SetDataFormat(&c_dfDIJoystick2)))
+	for(int i=0;i<(int)joyDevices.size();i++) {
+		JoystickF[i].Attached = true;
+		JoystickF[i].Device = joyDevices[i];
+		JoystickF[i].FeedBack = true;
+
+		LPDIRECTINPUTDEVICE8 pJoystick = joyDevices[i];
+
+		if (pJoystick)
 		{
-			if(FAILED(pJoystick->SetCooperativeLevel(hParentWnd,DISCL_BACKGROUND|DISCL_EXCLUSIVE)))
+			if(!FAILED(pJoystick->SetDataFormat(&c_dfDIJoystick2)))
 			{
-				pJoystick->Release();
-				pJoystick = NULL;
+				if(FAILED(pJoystick->SetCooperativeLevel(hParentWnd,DISCL_BACKGROUND|DISCL_EXCLUSIVE)))
+				{
+					pJoystick->Release();
+					pJoystick = NULL;
+				}
+				else
+				{
+					tmp_Joystick = pJoystick;
+					pJoystick->EnumObjects(::EnumObjects, (VOID*)hParentWnd, DIDFT_ALL);
+					memset(&DIJoycap,0,sizeof(DIDEVCAPS));
+					DIJoycap.dwSize=sizeof(DIDEVCAPS);
+					pJoystick->GetCapabilities(&DIJoycap);
+				}
 			}
 			else
 			{
-				tmp_Joystick = pJoystick;
-				pJoystick->EnumObjects(::EnumObjects, (VOID*)hParentWnd, DIDFT_ALL);
-				memset(&DIJoycap,0,sizeof(DIDEVCAPS));
-				DIJoycap.dwSize=sizeof(DIDEVCAPS);
-				pJoystick->GetCapabilities(&DIJoycap);
+				JoystickF[i].Attached = false;
+				JoystickF[i].Device = NULL;
+				pJoystick->Release();
+				pJoystick = NULL;
 			}
 		}
-		else
+
+		if (pJoystick)
 		{
-			pJoystick->Release();
-			pJoystick = NULL;
-		}
-	}
+			DIPROPDWORD dipdw;
+			dipdw.diph.dwSize = sizeof(DIPROPDWORD);
+			dipdw.diph.dwHeaderSize = sizeof(DIPROPHEADER);
+			dipdw.diph.dwObj = 0;
+			dipdw.diph.dwHow = DIPH_DEVICE;
+			dipdw.dwData = 0;
+			if ( !FAILED( pJoystick->SetProperty(DIPROP_AUTOCENTER, &dipdw.diph) ) )
+			{
+				DWORD		rgdwAxes[1] = { DIJOFS_Y };
+				LONG		rglDirection[2] = { 0 };
+				DICONSTANTFORCE		cf = { 0 };
+				DIEFFECT	eff;
 
-	if (pJoystick)
-	{
-		DIPROPDWORD dipdw;
-		dipdw.diph.dwSize = sizeof(DIPROPDWORD);
-		dipdw.diph.dwHeaderSize = sizeof(DIPROPHEADER);
-		dipdw.diph.dwObj = 0;
-		dipdw.diph.dwHow = DIPH_DEVICE;
-		dipdw.dwData = 0;
-		if ( !FAILED( pJoystick->SetProperty(DIPROP_AUTOCENTER, &dipdw.diph) ) )
+				cf.lMagnitude = (DI_FFNOMINALMAX * 100);
+				
+				memset(&eff, 0, sizeof(eff));
+				eff.dwSize = sizeof(DIEFFECT);
+				eff.dwFlags = DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS;
+				eff.dwDuration = INFINITE;
+				eff.dwSamplePeriod = 0;
+				eff.dwGain = DI_FFNOMINALMAX;
+				eff.dwTriggerButton = DIEB_NOTRIGGER;
+				eff.dwTriggerRepeatInterval = 0;
+				eff.cAxes = 1;
+				eff.rgdwAxes = rgdwAxes;
+				eff.rglDirection = rglDirection;
+				eff.lpEnvelope = 0;
+				eff.cbTypeSpecificParams = sizeof( DICONSTANTFORCE );
+				eff.lpvTypeSpecificParams = &cf;
+				eff.dwStartDelay = 0;
+
+				if( FAILED( pJoystick->CreateEffect(GUID_ConstantForce, &eff, &JoystickF[i].pEffect, NULL) ) )
+					JoystickF[i].FeedBack = FALSE;
+			}
+			else
+				JoystickF[i].FeedBack = FALSE;
+			{}
+		}
+
+		INFO("DirectX Input: \n");
+		if (pJoystick != NULL)
 		{
-			DWORD		rgdwAxes[1] = { DIJOFS_Y };
-			LONG		rglDirection[2] = { 0 };
-			DICONSTANTFORCE		cf = { 0 };
-			DIEFFECT	eff;
-
-			cf.lMagnitude = (DI_FFNOMINALMAX * 100);
-			
-			memset(&eff, 0, sizeof(eff));
-			eff.dwSize = sizeof(DIEFFECT);
-			eff.dwFlags = DIEFF_CARTESIAN | DIEFF_OBJECTOFFSETS;
-			eff.dwDuration = INFINITE;
-			eff.dwSamplePeriod = 0;
-			eff.dwGain = DI_FFNOMINALMAX;
-			eff.dwTriggerButton = DIEB_NOTRIGGER;
-			eff.dwTriggerRepeatInterval = 0;
-			eff.cAxes = 1;
-			eff.rgdwAxes = rgdwAxes;
-			eff.rglDirection = rglDirection;
-			eff.lpEnvelope = 0;
-			eff.cbTypeSpecificParams = sizeof( DICONSTANTFORCE );
-			eff.lpvTypeSpecificParams = &cf;
-			eff.dwStartDelay = 0;
-
-			if( FAILED( pJoystick->CreateEffect(GUID_ConstantForce, &eff, &pEffect, NULL) ) )
-				Feedback = FALSE;
+			INFO("   - gamecontrol successfully inited: %s\n", joyDeviceNames[i].c_str());
+			if (joyDeviceFeedback[i]) INFO("\t\t\t\t      (with FeedBack support)\n");
 		}
-		else
-			Feedback = FALSE;
-	}
-
-	INFO("DirectX Input: \n");
-	if (pJoystick != NULL)
-	{
-		INFO("   - gamecontrol successfully inited: %s\n", JoystickName);
-		if (Feedback) INFO("\t\t\t\t      (with FeedBack support)\n");
 	}
 
 	paused = FALSE;
@@ -495,10 +597,10 @@ BOOL di_init()
 	return TRUE;
 }
 
-BOOL JoystickEnabled()
-{
-	return (pJoystick==NULL?FALSE:TRUE);
-}
+//BOOL JoystickEnabled()
+//{
+//	return (pJoystick==NULL?FALSE:TRUE);
+//}
 
 
 HWND funky;
@@ -606,71 +708,78 @@ void CheckAxis_game (int val, int min, int max, bool &first, bool &second)
 
 void S9xUpdateJoyState()
 {
-	memset(&Joystick[0],0,sizeof(Joystick[0]));
-
-	int C = 0;
-	if (pJoystick)
+	for(int C=0;C<16;C++)
 	{
-		DIJOYSTATE2 JoyStatus;
-
-		HRESULT hr=pJoystick->Poll();
-		if (FAILED(hr))	
-			pJoystick->Acquire();
-		else
+		memset(&Joystick[C],0,sizeof(Joystick[C]));
+		if(!JoystickF[C].Attached) continue;
+		LPDIRECTINPUTDEVICE8 pJoystick = JoystickF[C].Device;
+		if (pJoystick)
 		{
-			hr=pJoystick->GetDeviceState(sizeof(JoyStatus),&JoyStatus);
-			if (FAILED(hr)) hr=pJoystick->Acquire();
+			DIJOYSTATE2 JoyStatus;
+
+			HRESULT hr=pJoystick->Poll();
+			if (FAILED(hr))	
+				pJoystick->Acquire();
 			else
 			{
-				CheckAxis_game(JoyStatus.lX,-10000,10000,Joystick[0].Left,Joystick[0].Right);
-				CheckAxis_game(JoyStatus.lY,-10000,10000,Joystick[0].Up,Joystick[0].Down);
-		
-				 switch (JoyStatus.rgdwPOV[0])
+				hr=pJoystick->GetDeviceState(sizeof(JoyStatus),&JoyStatus);
+				if (FAILED(hr)) hr=pJoystick->Acquire();
+				else
 				{
-             case JOY_POVBACKWARD:
-                Joystick[C].PovDown = true;
-                break;
-			case 4500:
-				//Joystick[C].PovUpRight = true;
-				Joystick[C].PovUp = true;
-				Joystick[C].PovRight = true;
-				break;
-			case 13500:
-				//Joystick[C].PovDnRight = true;
-				Joystick[C].PovDown = true;
-				Joystick[C].PovRight = true;
-				break;
-			case 22500:
-				//Joystick[C].PovDnLeft = true;
-				Joystick[C].PovDown = true;
-				Joystick[C].PovLeft = true;
-				break;
-			case 31500:
-				//Joystick[C].PovUpLeft = true;
-				Joystick[C].PovUp = true;
-				Joystick[C].PovLeft = true;
-				break;
+					CheckAxis_game(JoyStatus.lX,-10000,10000,Joystick[C].Left,Joystick[C].Right);
+					CheckAxis_game(JoyStatus.lY,-10000,10000,Joystick[C].Up,Joystick[C].Down);
+					CheckAxis_game(JoyStatus.lZ,-10000,10000,Joystick[C].ZNeg,Joystick[C].ZPos);
+					CheckAxis_game(JoyStatus.lRx,-10000,10000,Joystick[C].XRotMin,Joystick[C].XRotMax);
+					CheckAxis_game(JoyStatus.lRy,-10000,10000,Joystick[C].YRotMin,Joystick[C].YRotMax);
+					CheckAxis_game(JoyStatus.lRz,-10000,10000,Joystick[C].ZRotMin,Joystick[C].ZRotMax);
 
-            case JOY_POVFORWARD:
-                Joystick[C].PovUp = true;
-                break;
+					 switch (JoyStatus.rgdwPOV[0])
+					{
+				 case JOY_POVBACKWARD:
+					Joystick[C].PovDown = true;
+					break;
+				case 4500:
+					//Joystick[C].PovUpRight = true;
+					Joystick[C].PovUp = true;
+					Joystick[C].PovRight = true;
+					break;
+				case 13500:
+					//Joystick[C].PovDnRight = true;
+					Joystick[C].PovDown = true;
+					Joystick[C].PovRight = true;
+					break;
+				case 22500:
+					//Joystick[C].PovDnLeft = true;
+					Joystick[C].PovDown = true;
+					Joystick[C].PovLeft = true;
+					break;
+				case 31500:
+					//Joystick[C].PovUpLeft = true;
+					Joystick[C].PovUp = true;
+					Joystick[C].PovLeft = true;
+					break;
 
-            case JOY_POVLEFT:
-				Joystick[C].PovLeft = true;
-                break;
+				case JOY_POVFORWARD:
+					Joystick[C].PovUp = true;
+					break;
 
-            case JOY_POVRIGHT:
-				Joystick[C].PovRight = true;
-                break;
+				case JOY_POVLEFT:
+					Joystick[C].PovLeft = true;
+					break;
 
-            default:
-                break;
+				case JOY_POVRIGHT:
+					Joystick[C].PovRight = true;
+					break;
+
+				default:
+					break;
+					}
+
+	   for(int B=0;B<128;B++)
+			if( JoyStatus.rgbButtons[B] )
+				Joystick[C].Button[B] = true;
+
 				}
-
-   for(int B=0;B<128;B++)
-        if( JoyStatus.rgbButtons[B] )
-			Joystick[C].Button[B] = true;
-
 			}
 		}
 	}
@@ -678,157 +787,166 @@ void S9xUpdateJoyState()
 
 void di_poll_scan()
 {
-	int C = 0;
-	if (pJoystick)
+	for(int C=0;C<16;C++)
 	{
-		DIJOYSTATE2 JoyStatus;
-
-		HRESULT hr=pJoystick->Poll();
-		if (FAILED(hr))	
-			pJoystick->Acquire();
-		else
+		//if(!JoystickF[C].Attached) continue;
+		LPDIRECTINPUTDEVICE8 pJoystick = JoystickF[C].Device;
+		if(!pJoystick) continue;
+		if (pJoystick)
 		{
-			hr=pJoystick->GetDeviceState(sizeof(JoyStatus),&JoyStatus);
-			if (FAILED(hr)) hr=pJoystick->Acquire();
+			DIJOYSTATE2 JoyStatus;
+
+			HRESULT hr=pJoystick->Poll();
+			if (FAILED(hr))	
+				pJoystick->Acquire();
 			else
 			{
-				CheckAxis(0,0,JoyStatus.lX,-10000,10000,Joystick[0].Left,Joystick[0].Right);
-				CheckAxis(0,2,JoyStatus.lY,-10000,10000,Joystick[0].Down,Joystick[0].Up);
-		
-				 switch (JoyStatus.rgdwPOV[0])
+				hr=pJoystick->GetDeviceState(sizeof(JoyStatus),&JoyStatus);
+				if (FAILED(hr)) hr=pJoystick->Acquire();
+				else
 				{
-             case JOY_POVBACKWARD:
-                if( !JoystickF[C].PovDown)
-                {   JoystickChanged( C, 7); }
+					CheckAxis(C,0,JoyStatus.lX,-10000,10000,Joystick[C].Left,Joystick[C].Right);
+					CheckAxis(C,2,JoyStatus.lY,-10000,10000,Joystick[C].Down,Joystick[C].Up);
+					CheckAxis(C,41,JoyStatus.lZ,-10000,10000,Joystick[C].ZNeg,Joystick[C].ZPos);
+					CheckAxis(C,53,JoyStatus.lRx,-10000,10000,Joystick[C].XRotMin,Joystick[C].XRotMax);
+					CheckAxis(C,55,JoyStatus.lRy,-10000,10000,Joystick[C].YRotMin,Joystick[C].YRotMax);
+					CheckAxis(C,57,JoyStatus.lRz,-10000,10000,Joystick[C].ZRotMin,Joystick[C].ZRotMax);
+			
+					 switch (JoyStatus.rgdwPOV[0])
+					{
+				 case JOY_POVBACKWARD:
+					if( !JoystickF[C].PovDown)
+					{   JoystickChanged( C, 7); }
 
-                JoystickF[C].PovDown = true;
-                JoystickF[C].PovUp = false;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-                break;
-			case 4500:
-				if( !JoystickF[C].PovUpRight)
-                {   JoystickChanged( C, 52); }
-				JoystickF[C].PovDown = false;
-                JoystickF[C].PovUp = false;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = true;
-				break;
-			case 13500:
-				if( !JoystickF[C].PovDnRight)
-                {   JoystickChanged( C, 50); }
-				JoystickF[C].PovDown = false;
-                JoystickF[C].PovUp = false;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = true;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-				break;
-			case 22500:
-				if( !JoystickF[C].PovDnLeft)
-                {   JoystickChanged( C, 49); }
-				JoystickF[C].PovDown = false;
-                JoystickF[C].PovUp = false;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = true;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-				break;
-			case 31500:
-				if( !JoystickF[C].PovUpLeft)
-                {   JoystickChanged( C, 51); }
-				JoystickF[C].PovDown = false;
-                JoystickF[C].PovUp = false;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = true;
-				JoystickF[C].PovUpRight = false;
-				break;
+					JoystickF[C].PovDown = true;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
+				case 4500:
+					if( !JoystickF[C].PovUpRight)
+					{   JoystickChanged( C, 52); }
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = true;
+					break;
+				case 13500:
+					if( !JoystickF[C].PovDnRight)
+					{   JoystickChanged( C, 50); }
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = true;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
+				case 22500:
+					if( !JoystickF[C].PovDnLeft)
+					{   JoystickChanged( C, 49); }
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = true;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
+				case 31500:
+					if( !JoystickF[C].PovUpLeft)
+					{   JoystickChanged( C, 51); }
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = true;
+					JoystickF[C].PovUpRight = false;
+					break;
 
-            case JOY_POVFORWARD:
-                if( !JoystickF[C].PovUp)
-                {   JoystickChanged( C, 6); }
+				case JOY_POVFORWARD:
+					if( !JoystickF[C].PovUp)
+					{   JoystickChanged( C, 6); }
 
-                JoystickF[C].PovDown = false;
-                JoystickF[C].PovUp = true;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-                break;
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = true;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
 
-            case JOY_POVLEFT:
-                if( !JoystickF[C].PovLeft)
-                {   JoystickChanged( C, 4); }
+				case JOY_POVLEFT:
+					if( !JoystickF[C].PovLeft)
+					{   JoystickChanged( C, 4); }
 
-				JoystickF[C].PovDown = false;
-				JoystickF[C].PovUp = false;
-				JoystickF[C].PovLeft = true;
-				JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-                break;
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = true;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
 
-            case JOY_POVRIGHT:
-                if( !JoystickF[C].PovRight)
-                {   JoystickChanged( C, 5); }
+				case JOY_POVRIGHT:
+					if( !JoystickF[C].PovRight)
+					{   JoystickChanged( C, 5); }
 
-				JoystickF[C].PovDown = false;
-				JoystickF[C].PovUp = false;
-				JoystickF[C].PovLeft = false;
-				JoystickF[C].PovRight = true;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-                break;
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = true;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
 
-            default:
-                JoystickF[C].PovDown = false;
-                JoystickF[C].PovUp = false;
-                JoystickF[C].PovLeft = false;
-                JoystickF[C].PovRight = false;
-				JoystickF[C].PovDnLeft = false;
-				JoystickF[C].PovDnRight = false;
-				JoystickF[C].PovUpLeft = false;
-				JoystickF[C].PovUpRight = false;
-                break;
+				default:
+					JoystickF[C].PovDown = false;
+					JoystickF[C].PovUp = false;
+					JoystickF[C].PovLeft = false;
+					JoystickF[C].PovRight = false;
+					JoystickF[C].PovDnLeft = false;
+					JoystickF[C].PovDnRight = false;
+					JoystickF[C].PovUpLeft = false;
+					JoystickF[C].PovUpRight = false;
+					break;
+					}
+
+	   for(int B=0;B<128;B++)
+			if( JoyStatus.rgbButtons[B] )
+			{
+				if( !JoystickF[C].Button[B])
+				{
+					JoystickChanged( C, (short)(8+B));
+					JoystickF[C].Button[B] = true;
 				}
-
-   for(int B=0;B<128;B++)
-        if( JoyStatus.rgbButtons[B] )
-        {
-            if( !JoystickF[C].Button[B])
-            {
-                JoystickChanged( C, (short)(8+B));
-                JoystickF[C].Button[B] = true;
-            }
-        }
-        else
-        {   JoystickF[C].Button[B] = false; }
+			}
+			else
+			{   JoystickF[C].Button[B] = false; }
 
 
+				}
 			}
 		}
-	}
+	} // C loop
 
 }
 
@@ -861,14 +979,22 @@ void TranslateKey(WORD keyz,char *out)
 		case 50: strcat(out,GAMEDEVICE_POVDNRIGHT); break;
 		case 51: strcat(out,GAMEDEVICE_POVUPLEFT); break;
 		case 52: strcat(out,GAMEDEVICE_POVUPRIGHT); break;
-		case 41: strcat(out,GAMEDEVICE_ZPOS); break;
-		case 42: strcat(out,GAMEDEVICE_ZNEG); break;
+		case 41: strcat(out,GAMEDEVICE_ZNEG); break;
+		case 42: strcat(out,GAMEDEVICE_ZPOS); break;
 		case 43: strcat(out,GAMEDEVICE_RPOS); break;
 		case 44: strcat(out,GAMEDEVICE_RNEG); break;
 		case 45: strcat(out,GAMEDEVICE_UPOS); break;
 		case 46: strcat(out,GAMEDEVICE_UNEG); break;
 		case 47: strcat(out,GAMEDEVICE_VPOS); break;
 		case 48: strcat(out,GAMEDEVICE_VNEG); break;
+		
+		case 53: strcat(out,GAMEDEVICE_XROTPOS); break;
+		case 54: strcat(out,GAMEDEVICE_XROTNEG); break;
+		case 55: strcat(out,GAMEDEVICE_YROTPOS); break;
+		case 56: strcat(out,GAMEDEVICE_YROTNEG); break;
+		case 57: strcat(out,GAMEDEVICE_ZROTPOS); break;
+		case 58: strcat(out,GAMEDEVICE_ZROTNEG); break;
+
 		default:
 			if ((keyz & 0xff) > 40)
             {
@@ -1140,6 +1266,37 @@ static void InitCustomControls()
 
     RegisterClassEx(&wc);
 
+	wc.cbSize         = sizeof(wc);
+    wc.lpszClassName  = szGuitarClassName;
+    wc.hInstance      = GetModuleHandle(0);
+    wc.lpfnWndProc    = GuitarInputCustomWndProc;
+    wc.hCursor        = LoadCursor (NULL, IDC_ARROW);
+    wc.hIcon          = 0;
+    wc.lpszMenuName   = 0;
+    wc.hbrBackground  = (HBRUSH)GetSysColorBrush(COLOR_BTNFACE);
+    wc.style          = 0;
+    wc.cbClsExtra     = 0;
+    wc.cbWndExtra     = sizeof(InputCust *);
+    wc.hIconSm        = 0;
+
+
+    RegisterClassEx(&wc);
+
+	wc.cbSize         = sizeof(wc);
+    wc.lpszClassName  = szPaddleClassName;
+    wc.hInstance      = GetModuleHandle(0);
+    wc.lpfnWndProc    = PaddleInputCustomWndProc;
+    wc.hCursor        = LoadCursor (NULL, IDC_ARROW);
+    wc.hIcon          = 0;
+    wc.lpszMenuName   = 0;
+    wc.hbrBackground  = (HBRUSH)GetSysColorBrush(COLOR_BTNFACE);
+    wc.style          = 0;
+    wc.cbClsExtra     = 0;
+    wc.cbWndExtra     = sizeof(InputCust *);
+    wc.hIconSm        = 0;
+
+
+    RegisterClassEx(&wc);
 }
 
 InputCust * GetInputCustom(HWND hwnd)
@@ -1202,7 +1359,7 @@ static LRESULT CALLBACK InputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
 {
 	// retrieve the custom structure POINTER for THIS window
     InputCust *icp = GetInputCustom(hwnd);
-	HWND pappy = (HWND__ *)GetWindowLongPtr(hwnd,GWL_HWNDPARENT);
+	HWND pappy = (HWND__ *)GetWindowLongPtr(hwnd,GWLP_HWNDPARENT);
 	funky= hwnd;
 
 	static HWND selectedItem = NULL;
@@ -1341,6 +1498,290 @@ static LRESULT CALLBACK InputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, L
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+static LRESULT CALLBACK GuitarInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+		// retrieve the custom structure POINTER for THIS window
+    InputCust *icp = GetInputCustom(hwnd);
+	HWND pappy = (HWND__ *)GetWindowLongPtr(hwnd,GWLP_HWNDPARENT);
+	funky= hwnd;
+
+	static HWND selectedItem = NULL;
+
+	char temp[100];
+	COLORREF col;
+    switch(msg)
+    {
+
+	case WM_GETDLGCODE:
+		return DLGC_WANTARROWS|DLGC_WANTALLKEYS|DLGC_WANTCHARS;
+		break;
+
+
+    case WM_NCCREATE:
+
+        // Allocate a new CustCtrl structure for this window.
+        icp = (InputCust *) malloc( sizeof(InputCust) );
+
+        // Failed to allocate, stop window creation.
+        if(icp == NULL) return FALSE;
+
+        // Initialize the CustCtrl structure.
+        icp->hwnd      = hwnd;
+        icp->crForeGnd = GetSysColor(COLOR_WINDOWTEXT);
+        icp->crBackGnd = GetSysColor(COLOR_WINDOW);
+        icp->hFont     = (HFONT__ *) GetStockObject(DEFAULT_GUI_FONT);
+
+        // Assign the window text specified in the call to CreateWindow.
+        SetWindowText(hwnd, ((CREATESTRUCT *)lParam)->lpszName);
+
+        // Attach custom structure to this window.
+        SetInputCustom(hwnd, icp);
+
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+
+		selectedItem = NULL;
+
+		SetTimer(hwnd,777,125,NULL);
+
+        // Continue with window creation.
+        return TRUE;
+
+    // Clean up when the window is destroyed.
+    case WM_NCDESTROY:
+        free(icp);
+        break;
+	case WM_PAINT:
+		return InputCustom_OnPaint(icp,wParam,lParam);
+		break;
+	case WM_ERASEBKGND:
+		return 1;
+	case WM_USER+45:
+	case WM_KEYDOWN:
+		TranslateKey(wParam,temp);
+		col = CheckButtonKey(wParam);
+
+		icp->crForeGnd = ((~col) & 0x00ffffff);
+		icp->crBackGnd = col;
+		SetWindowText(hwnd,temp);
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+		SendMessage(pappy,WM_USER+43,wParam,(LPARAM)hwnd);
+
+		break;
+	case WM_USER+44:
+
+		TranslateKey(wParam,temp);
+		if(IsWindowEnabled(hwnd))
+		{
+			col = CheckButtonKey(wParam);
+		}
+		else
+		{
+			col = RGB( 192,192,192);
+		}
+		icp->crForeGnd = ((~col) & 0x00ffffff);
+		icp->crBackGnd = col;
+		SetWindowText(hwnd,temp);
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+
+		break;
+
+	case WM_SETFOCUS:
+	{
+		selectedItem = hwnd;
+		col = RGB( 0,255,0);
+		icp->crForeGnd = ((~col) & 0x00ffffff);
+		icp->crBackGnd = col;
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+//		tid = wParam;
+
+		break;
+	}
+	case WM_KILLFOCUS:
+	{
+		selectedItem = NULL;
+		SendMessage(pappy,WM_USER+46,wParam,(LPARAM)hwnd); // refresh fields on deselect
+		break;
+	}
+
+	case WM_TIMER:
+		if(hwnd == selectedItem)
+		{
+			FunkyJoyStickTimer();
+		}
+		SetTimer(hwnd,777,125,NULL);
+		break;
+	case WM_LBUTTONDOWN:
+		SetFocus(hwnd);
+		break;
+	case WM_ENABLE:
+		COLORREF col;
+		if(wParam)
+		{
+			col = RGB( 255,255,255);
+			icp->crForeGnd = ((~col) & 0x00ffffff);
+			icp->crBackGnd = col;
+		}
+		else
+		{
+			col = RGB( 192,192,192);
+			icp->crForeGnd = ((~col) & 0x00ffffff);
+			icp->crBackGnd = col;
+		}
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+		return true;
+    default:
+        break;
+    }
+	return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+static LRESULT CALLBACK PaddleInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+		// retrieve the custom structure POINTER for THIS window
+    InputCust *icp = GetInputCustom(hwnd);
+	HWND pappy = (HWND__ *)GetWindowLongPtr(hwnd,GWLP_HWNDPARENT);
+	funky= hwnd;
+
+	static HWND selectedItem = NULL;
+
+	char temp[100];
+	COLORREF col;
+    switch(msg)
+    {
+
+	case WM_GETDLGCODE:
+		return DLGC_WANTARROWS|DLGC_WANTALLKEYS|DLGC_WANTCHARS;
+		break;
+
+
+    case WM_NCCREATE:
+
+        // Allocate a new CustCtrl structure for this window.
+        icp = (InputCust *) malloc( sizeof(InputCust) );
+
+        // Failed to allocate, stop window creation.
+        if(icp == NULL) return FALSE;
+
+        // Initialize the CustCtrl structure.
+        icp->hwnd      = hwnd;
+        icp->crForeGnd = GetSysColor(COLOR_WINDOWTEXT);
+        icp->crBackGnd = GetSysColor(COLOR_WINDOW);
+        icp->hFont     = (HFONT__ *) GetStockObject(DEFAULT_GUI_FONT);
+
+        // Assign the window text specified in the call to CreateWindow.
+        SetWindowText(hwnd, ((CREATESTRUCT *)lParam)->lpszName);
+
+        // Attach custom structure to this window.
+        SetInputCustom(hwnd, icp);
+
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+
+		selectedItem = NULL;
+
+		SetTimer(hwnd,777,125,NULL);
+
+        // Continue with window creation.
+        return TRUE;
+
+    // Clean up when the window is destroyed.
+    case WM_NCDESTROY:
+        free(icp);
+        break;
+	case WM_PAINT:
+		return InputCustom_OnPaint(icp,wParam,lParam);
+		break;
+	case WM_ERASEBKGND:
+		return 1;
+	case WM_USER+45:
+	case WM_KEYDOWN:
+		TranslateKey(wParam,temp);
+		col = CheckButtonKey(wParam);
+
+		icp->crForeGnd = ((~col) & 0x00ffffff);
+		icp->crBackGnd = col;
+		SetWindowText(hwnd,temp);
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+		SendMessage(pappy,WM_USER+43,wParam,(LPARAM)hwnd);
+
+		break;
+	case WM_USER+44:
+
+		TranslateKey(wParam,temp);
+		if(IsWindowEnabled(hwnd))
+		{
+			col = CheckButtonKey(wParam);
+		}
+		else
+		{
+			col = RGB( 192,192,192);
+		}
+		icp->crForeGnd = ((~col) & 0x00ffffff);
+		icp->crBackGnd = col;
+		SetWindowText(hwnd,temp);
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+
+		break;
+
+	case WM_SETFOCUS:
+	{
+		selectedItem = hwnd;
+		col = RGB( 0,255,0);
+		icp->crForeGnd = ((~col) & 0x00ffffff);
+		icp->crBackGnd = col;
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+//		tid = wParam;
+
+		break;
+	}
+	case WM_KILLFOCUS:
+	{
+		selectedItem = NULL;
+		SendMessage(pappy,WM_USER+46,wParam,(LPARAM)hwnd); // refresh fields on deselect
+		break;
+	}
+
+	case WM_TIMER:
+		if(hwnd == selectedItem)
+		{
+			FunkyJoyStickTimer();
+		}
+		SetTimer(hwnd,777,125,NULL);
+		break;
+	case WM_LBUTTONDOWN:
+		SetFocus(hwnd);
+		break;
+	case WM_ENABLE:
+		COLORREF col;
+		if(wParam)
+		{
+			col = RGB( 255,255,255);
+			icp->crForeGnd = ((~col) & 0x00ffffff);
+			icp->crBackGnd = col;
+		}
+		else
+		{
+			col = RGB( 192,192,192);
+			icp->crForeGnd = ((~col) & 0x00ffffff);
+			icp->crBackGnd = col;
+		}
+		InvalidateRect(icp->hwnd, NULL, FALSE);
+		UpdateWindow(icp->hwnd);
+		return true;
+    default:
+        break;
+    }
+	return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
 static void TranslateKeyWithModifiers(int wParam, int modifiers, char * outStr)
 {
 
@@ -1384,7 +1825,7 @@ static LRESULT CALLBACK HotInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam
 {
 	// retrieve the custom structure POINTER for THIS window
     InputCust *icp = GetInputCustom(hwnd);
-	HWND pappy = (HWND__ *)GetWindowLongPtr(hwnd,GWL_HWNDPARENT);
+	HWND pappy = (HWND__ *)GetWindowLongPtr(hwnd,GWLP_HWNDPARENT);
 	funky= hwnd;
 
 	static HWND selectedItem = NULL;
@@ -1605,7 +2046,7 @@ static LRESULT CALLBACK HotInputCustomWndProc(HWND hwnd, UINT msg, WPARAM wParam
 	case WM_TIMER:
 		if(hwnd == selectedItem)
 		{
-			//FunkyJoyStickTimer();
+			FunkyJoyStickTimer();
 		}
 		SetTimer(hwnd,747,125,NULL);
 		break;
@@ -1666,45 +2107,42 @@ void EnableDisableKeyFields (int index, HWND hDlg)
 	bool enableUnTurboable;
 	if(index < 5)
 	{
-		SetDlgItemText(hDlg,IDC_LABEL_RIGHT,INPUTCONFIG_LABEL_RIGHT);
-		SetDlgItemText(hDlg,IDC_LABEL_UPLEFT,INPUTCONFIG_LABEL_UPLEFT);
-		SetDlgItemText(hDlg,IDC_LABEL_UPRIGHT,INPUTCONFIG_LABEL_UPRIGHT);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWNRIGHT,INPUTCONFIG_LABEL_DOWNRIGHT);
-		SetDlgItemText(hDlg,IDC_LABEL_UP,INPUTCONFIG_LABEL_UP);
-		SetDlgItemText(hDlg,IDC_LABEL_LEFT,INPUTCONFIG_LABEL_LEFT);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWN,INPUTCONFIG_LABEL_DOWN);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWNLEFT,INPUTCONFIG_LABEL_DOWNLEFT);
+		// Support Unicode display
+		SetDlgItemText(hDlg,IDC_LABEL_RIGHT, (LPCSTR)INPUTCONFIG_LABEL_RIGHT);
+		SetDlgItemText(hDlg,IDC_LABEL_UPLEFT, (LPCSTR)INPUTCONFIG_LABEL_UPLEFT);
+		SetDlgItemText(hDlg,IDC_LABEL_UPRIGHT, (LPCSTR)INPUTCONFIG_LABEL_UPRIGHT);
+		SetDlgItemText(hDlg,IDC_LABEL_DOWNRIGHT, (LPCSTR)INPUTCONFIG_LABEL_DOWNRIGHT);
+		SetDlgItemText(hDlg,IDC_LABEL_UP, (LPCSTR)INPUTCONFIG_LABEL_UP);
+		SetDlgItemText(hDlg,IDC_LABEL_LEFT, (LPCSTR)INPUTCONFIG_LABEL_LEFT);
+		SetDlgItemText(hDlg,IDC_LABEL_DOWN, (LPCSTR)INPUTCONFIG_LABEL_DOWN);
+		SetDlgItemText(hDlg,IDC_LABEL_DOWNLEFT, (LPCSTR)INPUTCONFIG_LABEL_DOWNLEFT);
 		enableUnTurboable = true;
 	}
 	else
 	{		
-		SetDlgItemText(hDlg,IDC_LABEL_UP,INPUTCONFIG_LABEL_MAKE_TURBO);
-		SetDlgItemText(hDlg,IDC_LABEL_LEFT,INPUTCONFIG_LABEL_MAKE_HELD);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWN,INPUTCONFIG_LABEL_MAKE_TURBO_HELD);
-		SetDlgItemText(hDlg,IDC_LABEL_RIGHT,INPUTCONFIG_LABEL_CLEAR_TOGGLES_AND_TURBO);
-		SetDlgItemText(hDlg,IDC_LABEL_UPLEFT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_LABEL_UPRIGHT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWNLEFT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWNRIGHT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_UPLEFT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_UPRIGHT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_DWNLEFT,INPUTCONFIG_LABEL_UNUSED);
-		SetDlgItemText(hDlg,IDC_DWNRIGHT,INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_LABEL_UP, (LPCSTR)INPUTCONFIG_LABEL_MAKE_TURBO);
+		SetDlgItemText(hDlg,IDC_LABEL_LEFT, (LPCSTR)INPUTCONFIG_LABEL_MAKE_HELD);
+		SetDlgItemText(hDlg,IDC_LABEL_DOWN, (LPCSTR)INPUTCONFIG_LABEL_MAKE_TURBO_HELD);
+		SetDlgItemText(hDlg,IDC_LABEL_RIGHT, (LPCSTR)INPUTCONFIG_LABEL_CLEAR_TOGGLES_AND_TURBO);
+		SetDlgItemText(hDlg,IDC_LABEL_UPLEFT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_LABEL_UPRIGHT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_LABEL_DOWNLEFT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_LABEL_DOWNRIGHT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_UPLEFT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_UPRIGHT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_DWNLEFT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
+		SetDlgItemText(hDlg,IDC_DWNRIGHT, (LPCSTR)INPUTCONFIG_LABEL_UNUSED);
 		enableUnTurboable = false;
 	}
 
-	EnableWindow(GetDlgItem(hDlg,IDC_UPLEFT), false);
-	EnableWindow(GetDlgItem(hDlg,IDC_UPRIGHT), false);
-	EnableWindow(GetDlgItem(hDlg,IDC_DWNRIGHT), false);
-	EnableWindow(GetDlgItem(hDlg,IDC_DWNLEFT), false);
-	EnableWindow(GetDlgItem(hDlg,IDC_DEBUG), false);
-	EnableWindow(GetDlgItem(hDlg,IDC_LID), true);
+	//EnableWindow(GetDlgItem(hDlg,IDC_UPLEFT), false);
+	//EnableWindow(GetDlgItem(hDlg,IDC_UPRIGHT), false);
+	//EnableWindow(GetDlgItem(hDlg,IDC_DWNRIGHT), false);
+	//EnableWindow(GetDlgItem(hDlg,IDC_DWNLEFT), false);
 }
 
 INT_PTR CALLBACK DlgInputConfig(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	char temp[256];
-	short C;
 	int i, which;
 	static int index=0;
 
@@ -1717,28 +2155,31 @@ INT_PTR CALLBACK DlgInputConfig(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
 switch(msg)
 	{
 	case WM_INITDIALOG:
+		// Support Unicode display
+		SetDlgItemTextW(hDlg,IDOK,BUTTON_OK);
+		SetDlgItemTextW(hDlg,IDCANCEL,BUTTON_CANCEL);
+		// Support Unicode display
+		//SetWindowText(hDlg,INPUTCONFIG_TITLE);
 		//if(DirectX.Clipped) S9xReRefresh();
-		SetWindowText(hDlg,INPUTCONFIG_TITLE);
 		//SetDlgItemText(hDlg,IDC_JPTOGGLE,INPUTCONFIG_JPTOGGLE);
-		SetDlgItemText(hDlg,IDOK,BUTTON_OK);
-		SetDlgItemText(hDlg,IDCANCEL,BUTTON_CANCEL);
 ///		SetDlgItemText(hDlg,IDC_DIAGTOGGLE,INPUTCONFIG_DIAGTOGGLE);
-		SetDlgItemText(hDlg,IDC_LABEL_UP,INPUTCONFIG_LABEL_UP);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWN,INPUTCONFIG_LABEL_DOWN);
-		SetDlgItemText(hDlg,IDC_LABEL_LEFT,INPUTCONFIG_LABEL_LEFT);
-		SetDlgItemText(hDlg,IDC_LABEL_A,INPUTCONFIG_LABEL_A);
-		SetDlgItemText(hDlg,IDC_LABEL_B,INPUTCONFIG_LABEL_B);
-		SetDlgItemText(hDlg,IDC_LABEL_X,INPUTCONFIG_LABEL_X);
-		SetDlgItemText(hDlg,IDC_LABEL_Y,INPUTCONFIG_LABEL_Y);
-		SetDlgItemText(hDlg,IDC_LABEL_L,INPUTCONFIG_LABEL_L);
-		SetDlgItemText(hDlg,IDC_LABEL_R,INPUTCONFIG_LABEL_R);
-		SetDlgItemText(hDlg,IDC_LABEL_START,INPUTCONFIG_LABEL_START);
-		SetDlgItemText(hDlg,IDC_LABEL_SELECT,INPUTCONFIG_LABEL_SELECT);
-		SetDlgItemText(hDlg,IDC_LABEL_UPRIGHT,INPUTCONFIG_LABEL_UPRIGHT);
-		SetDlgItemText(hDlg,IDC_LABEL_UPLEFT,INPUTCONFIG_LABEL_UPLEFT);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWNRIGHT,INPUTCONFIG_LABEL_DOWNRIGHT);
-		SetDlgItemText(hDlg,IDC_LABEL_DOWNLEFT,INPUTCONFIG_LABEL_DOWNLEFT);
-		SetDlgItemText(hDlg,IDC_LABEL_BLUE,INPUTCONFIG_LABEL_BLUE);
+		// Support Unicode display
+		SetDlgItemTextW(hDlg,IDC_LABEL_UP,(LPWSTR)INPUTCONFIG_LABEL_UP);
+		SetDlgItemTextW(hDlg,IDC_LABEL_DOWN,(LPWSTR)INPUTCONFIG_LABEL_DOWN);
+		SetDlgItemTextW(hDlg,IDC_LABEL_LEFT,(LPWSTR)INPUTCONFIG_LABEL_LEFT);
+		SetDlgItemTextW(hDlg,IDC_LABEL_A,(LPWSTR)INPUTCONFIG_LABEL_A);
+		SetDlgItemTextW(hDlg,IDC_LABEL_B,(LPWSTR)INPUTCONFIG_LABEL_B);
+		SetDlgItemTextW(hDlg,IDC_LABEL_X,(LPWSTR)INPUTCONFIG_LABEL_X);
+		SetDlgItemTextW(hDlg,IDC_LABEL_Y,(LPWSTR)INPUTCONFIG_LABEL_Y);
+		SetDlgItemTextW(hDlg,IDC_LABEL_L,(LPWSTR)INPUTCONFIG_LABEL_L);
+		SetDlgItemTextW(hDlg,IDC_LABEL_R,(LPWSTR)INPUTCONFIG_LABEL_R);
+		SetDlgItemTextW(hDlg,IDC_LABEL_START,(LPWSTR)INPUTCONFIG_LABEL_START);
+		SetDlgItemTextW(hDlg,IDC_LABEL_SELECT,(LPWSTR)INPUTCONFIG_LABEL_SELECT);
+		SetDlgItemTextW(hDlg,IDC_LABEL_UPRIGHT,(LPWSTR)INPUTCONFIG_LABEL_UPRIGHT);
+		SetDlgItemTextW(hDlg,IDC_LABEL_UPLEFT,(LPWSTR)INPUTCONFIG_LABEL_UPLEFT);
+		SetDlgItemTextW(hDlg,IDC_LABEL_DOWNRIGHT,(LPWSTR)INPUTCONFIG_LABEL_DOWNRIGHT);
+		SetDlgItemTextW(hDlg,IDC_LABEL_DOWNLEFT,(LPWSTR)INPUTCONFIG_LABEL_DOWNLEFT);
+		SetDlgItemTextW(hDlg,IDC_LABEL_BLUE,(LPWSTR)INPUTCONFIG_LABEL_BLUE);
 
 		for(i=5;i<10;i++)
 			Joypad[i].Left_Up = Joypad[i].Right_Up = Joypad[i].Left_Down = Joypad[i].Right_Down = 0;
@@ -1751,8 +2192,8 @@ switch(msg)
 		//for( C = 0; C != 16; C ++)
 	 //       JoystickF[C].Attached = joyGetDevCaps( JOYSTICKID1+C, &JoystickF[C].Caps, sizeof( JOYCAPS)) == JOYERR_NOERROR;
 
-		memset(&JoystickF[0],0,sizeof(JoystickF[0]));
-		JoystickF[0].Attached = pJoystick != NULL;
+		//memset(&JoystickF[0],0,sizeof(JoystickF[0]));
+		//JoystickF[0].Attached = pJoystick != NULL;
 
 
 		//for(i=1;i<6;i++)
@@ -1770,7 +2211,10 @@ switch(msg)
 		//SendDlgItemMessage(hDlg,IDC_JPCOMBO,CB_SETCURSEL,(WPARAM)0,0);
 
 		//SendDlgItemMessage(hDlg,IDC_JPTOGGLE,BM_SETCHECK, Joypad[index].Enabled ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
-		//SendDlgItemMessage(hDlg,IDC_ALLOWLEFTRIGHT,BM_SETCHECK, Settings.UpAndDown ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
+		
+		SendDlgItemMessage(hDlg,IDC_ALLOWLEFTRIGHT,BM_SETCHECK, allowUpAndDown ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
+		SendDlgItemMessage(hDlg,IDC_KILLSTYLUSTOP,BM_SETCHECK, killStylusTopScreen ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
+		SendDlgItemMessage(hDlg,IDC_KILLSTYLUSOFF,BM_SETCHECK, killStylusOffScreen ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
 
 		set_buttoninfo(index,hDlg);
 
@@ -1780,7 +2224,7 @@ switch(msg)
 
 		//SetFocus(GetDlgItem(hDlg,IDC_JPCOMBO));
 
-		return true;
+		return TRUE;
 		break;
 	case WM_CLOSE:
 		EndDialog(hDlg, 0);
@@ -1874,7 +2318,7 @@ switch(msg)
 		set_buttoninfo(index,hDlg);
 
 		PostMessage(hDlg,WM_NEXTDLGCTL,0,0);
-		return true;
+		return TRUE;
 	case WM_COMMAND:
 		switch(LOWORD(wParam))
 		{
@@ -1884,7 +2328,9 @@ switch(msg)
 			break;
 
 		case IDOK:
-			//Settings.UpAndDown = IsDlgButtonChecked(hDlg, IDC_ALLOWLEFTRIGHT);
+			allowUpAndDown = IsDlgButtonChecked(hDlg, IDC_ALLOWLEFTRIGHT) != 0;
+			killStylusTopScreen = IsDlgButtonChecked(hDlg, IDC_KILLSTYLUSTOP) != 0;
+			killStylusOffScreen = IsDlgButtonChecked(hDlg, IDC_KILLSTYLUSOFF) != 0;
 			SaveInputConfig();
 			EndDialog(hDlg,0);
 			break;
@@ -1897,30 +2343,30 @@ switch(msg)
 		//	break;
 
 		}
-		switch(HIWORD(wParam))
-		{
-			//case CBN_SELCHANGE:
-			//	index = SendDlgItemMessage(hDlg,IDC_JPCOMBO,CB_GETCURSEL,0,0);
-			//	SendDlgItemMessage(hDlg,IDC_JPCOMBO,CB_SETCURSEL,(WPARAM)index,0);
-			//	if(index > 4) index += 3; // skip controllers 6, 7, and 8 in the input dialog
-			//	if(index < 8)
-			//	{
-			//		SendDlgItemMessage(hDlg,IDC_JPTOGGLE,BM_SETCHECK, Joypad[index].Enabled ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
-			//		EnableWindow(GetDlgItem(hDlg,IDC_JPTOGGLE),TRUE);
-			//	}
-			//	else
-			//	{
-			//		SendDlgItemMessage(hDlg,IDC_JPTOGGLE,BM_SETCHECK, Joypad[index-8].Enabled ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
-			//		EnableWindow(GetDlgItem(hDlg,IDC_JPTOGGLE),FALSE);
-			//	}
+		//switch(HIWORD(wParam))
+		//{
+		//	case CBN_SELCHANGE:
+		//		index = SendDlgItemMessage(hDlg,IDC_JPCOMBO,CB_GETCURSEL,0,0);
+		//		SendDlgItemMessage(hDlg,IDC_JPCOMBO,CB_SETCURSEL,(WPARAM)index,0);
+		//		if(index > 4) index += 3; // skip controllers 6, 7, and 8 in the input dialog
+		//		if(index < 8)
+		//		{
+		//			SendDlgItemMessage(hDlg,IDC_JPTOGGLE,BM_SETCHECK, Joypad[index].Enabled ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
+		//			EnableWindow(GetDlgItem(hDlg,IDC_JPTOGGLE),TRUE);
+		//		}
+		//		else
+		//		{
+		//			SendDlgItemMessage(hDlg,IDC_JPTOGGLE,BM_SETCHECK, Joypad[index-8].Enabled ? (WPARAM)BST_CHECKED : (WPARAM)BST_UNCHECKED, 0);
+		//			EnableWindow(GetDlgItem(hDlg,IDC_JPTOGGLE),FALSE);
+		//		}
 
-			//	set_buttoninfo(index,hDlg);
+		//		set_buttoninfo(index,hDlg);
 
-			//	EnableDisableKeyFields(index,hDlg);
+		//		EnableDisableKeyFields(index,hDlg);
 
-			//	break;
-		}
-		return FALSE;
+		//		break;
+		//}
+		//return FALSE;
 
 	}
 
@@ -1930,11 +2376,10 @@ switch(msg)
 
 bool S9xGetState (WORD KeyIdent)
 {
-	if(KeyIdent == 0 || KeyIdent == VK_ESCAPE) // if it's the 'disabled' key, it's never pressed
+	if(KeyIdent == 0 || KeyIdent == 0xFF || KeyIdent == VK_ESCAPE) // if it's the 'disabled' key, it's never pressed
 		return true;
 
-	//TODO - option for background game keys
-	if(MainWindow->getHWnd() != GetForegroundWindow())
+	if(!allowBackgroundInput && MainWindow->getHWnd() != GetForegroundWindow())
 		return true;
 
     if (KeyIdent & 0x8000) // if it's a joystick 'key':
@@ -1957,14 +2402,20 @@ bool S9xGetState (WORD KeyIdent)
 			case 50:return !Joystick [j].PovDnRight;
 			case 51:return !Joystick [j].PovUpLeft;
 			case 52:return !Joystick [j].PovUpRight;
-            case 41:return !Joystick [j].ZUp;
-            case 42:return !Joystick [j].ZDown;
+            case 41:return !Joystick [j].ZNeg;
+            case 42:return !Joystick [j].ZPos;
             case 43:return !Joystick [j].RUp;
             case 44:return !Joystick [j].RDown;
             case 45:return !Joystick [j].UUp;
             case 46:return !Joystick [j].UDown;
             case 47:return !Joystick [j].VUp;
             case 48:return !Joystick [j].VDown;
+			case 53: return !Joystick[j].XRotMin;
+			case 54: return !Joystick[j].XRotMax;
+			case 55: return !Joystick[j].YRotMin;
+			case 56: return !Joystick[j].YRotMax;
+			case 57: return !Joystick[j].ZRotMin;
+			case 58: return !Joystick[j].ZRotMax;
 
             default:
                 if ((KeyIdent & 0xff) > 40)
@@ -1990,178 +2441,233 @@ bool S9xGetState (WORD KeyIdent)
 
 void S9xWinScanJoypads ()
 {
-    u32 PadState;
-
 	S9xUpdateJoyState();
 
     for (int J = 0; J < 8; J++)
     {
         if (Joypad [J].Enabled)
-        {
-			// toggle checks
-			{
-       	     	PadState  = 0;
-				PadState |= ToggleJoypadStorage[J].Left||TurboToggleJoypadStorage[J].Left			? LEFT_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Right||TurboToggleJoypadStorage[J].Right			? RIGHT_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Up||TurboToggleJoypadStorage[J].Up				? UP_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Down||TurboToggleJoypadStorage[J].Down			? DOWN_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Start||TurboToggleJoypadStorage[J].Start			? START_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Select||TurboToggleJoypadStorage[J].Select		? SELECT_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Lid||TurboToggleJoypadStorage[J].Lid				? LID_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Debug||TurboToggleJoypadStorage[J].Debug			? DEBUG_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].A||TurboToggleJoypadStorage[J].A					? A_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].B||TurboToggleJoypadStorage[J].B					? B_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].X||TurboToggleJoypadStorage[J].X					? X_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].Y||TurboToggleJoypadStorage[J].Y					? Y_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].L||TurboToggleJoypadStorage[J].L					? L_MASK : 0;
-				PadState |= ToggleJoypadStorage[J].R||TurboToggleJoypadStorage[J].R				    ? R_MASK : 0;
-			}
-			// auto-hold AND regular key/joystick presses
-			if(S9xGetState(Joypad[J+8].Left))
-			{
-				if(!S9xGetState(Joypad[J].Start))
-				{
-					int zzz=9;
-				}
-				PadState ^= (!S9xGetState(Joypad[J].R)||!S9xGetState(Joypad[J+8].R))      ?  R_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].L)||!S9xGetState(Joypad[J+8].L))      ?  L_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].X)||!S9xGetState(Joypad[J+8].X))      ?  X_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].A)||!S9xGetState(Joypad[J+8].A))      ? A_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Right))  ?   RIGHT_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Right_Up))  ? RIGHT_MASK + UP_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Right_Down)) ? RIGHT_MASK + DOWN_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Left))   ?   LEFT_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Left_Up)) ?   LEFT_MASK + UP_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Left_Down)) ?  LEFT_MASK + DOWN_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Down))   ?   DOWN_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Up))     ?   UP_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Start)||!S9xGetState(Joypad[J+8].Start))  ?  START_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Select)||!S9xGetState(Joypad[J+8].Select)) ?  SELECT_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Y)||!S9xGetState(Joypad[J+8].Y))      ?  Y_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].B)||!S9xGetState(Joypad[J+8].B))      ? B_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Lid)||!S9xGetState(Joypad[J+8].Lid))      ?  LID_MASK : 0;
-				PadState ^= (!S9xGetState(Joypad[J].Debug)||!S9xGetState(Joypad[J+8].Debug))      ? DEBUG_MASK : 0;
-			}
-
-			bool turbofy = !S9xGetState(Joypad[J+8].Up); // All Mod for turbo
-
-			u32 TurboMask = 0;
-
-			//handle turbo case! (autofire / auto-fire)
-			if(turbofy || ((TurboMask&A_MASK))&&(PadState&A_MASK) || !S9xGetState(Joypad[J+8].A      )) PadState^=(joypads[J]&A_MASK);
-			if(turbofy || ((TurboMask&B_MASK))&&(PadState&B_MASK) || !S9xGetState(Joypad[J+8].B      )) PadState^=(joypads[J]&B_MASK);
-			if(turbofy || ((TurboMask&Y_MASK))&&(PadState&Y_MASK) || !S9xGetState(Joypad[J+8].Y       )) PadState^=(joypads[J]&Y_MASK);
-			if(turbofy || ((TurboMask&X_MASK))&&(PadState&X_MASK) || !S9xGetState(Joypad[J+8].X       )) PadState^=(joypads[J]&X_MASK);
-			if(turbofy || ((TurboMask&L_MASK))&&(PadState&L_MASK) || !S9xGetState(Joypad[J+8].L       )) PadState^=(joypads[J]&L_MASK);
-			if(turbofy || ((TurboMask&R_MASK))&&(PadState&R_MASK) || !S9xGetState(Joypad[J+8].R       )) PadState^=(joypads[J]&R_MASK);
-			if(turbofy || ((TurboMask&START_MASK))&&(PadState&START_MASK) || !S9xGetState(Joypad[J+8].Start )) PadState^=(joypads[J]&START_MASK);
-			if(turbofy || ((TurboMask&SELECT_MASK))&&(PadState&SELECT_MASK) || !S9xGetState(Joypad[J+8].Select)) PadState^=(joypads[J]&SELECT_MASK);
-			if(turbofy || ((TurboMask&DEBUG_MASK))&&(PadState&DEBUG_MASK) || !S9xGetState(Joypad[J+8].Debug)) PadState^=(joypads[J]&DEBUG_MASK);
-			if(           ((TurboMask&LEFT_MASK))&&(PadState&LEFT_MASK)                                    ) PadState^=(joypads[J]&LEFT_MASK);
-			if(           ((TurboMask&UP_MASK))&&(PadState&UP_MASK)                                      ) PadState^=(joypads[J]&UP_MASK);
-			if(           ((TurboMask&RIGHT_MASK))&&(PadState&RIGHT_MASK)                                   ) PadState^=(joypads[J]&RIGHT_MASK);
-			if(           ((TurboMask&DOWN_MASK))&&(PadState&DOWN_MASK)                                    ) PadState^=(joypads[J]&DOWN_MASK);
-			if(           ((TurboMask&LID_MASK))&&(PadState&LID_MASK)                                    ) PadState^=(joypads[J]&LID_MASK);
-
-			if(TurboToggleJoypadStorage[J].A     ) PadState^=(joypads[J]&A_MASK);
-			if(TurboToggleJoypadStorage[J].B     ) PadState^=(joypads[J]&B_MASK);
-			if(TurboToggleJoypadStorage[J].Y     ) PadState^=(joypads[J]&Y_MASK);
-			if(TurboToggleJoypadStorage[J].X     ) PadState^=(joypads[J]&X_MASK);
-			if(TurboToggleJoypadStorage[J].L     ) PadState^=(joypads[J]&L_MASK);
-			if(TurboToggleJoypadStorage[J].R     ) PadState^=(joypads[J]&R_MASK);
-			if(TurboToggleJoypadStorage[J].Start ) PadState^=(joypads[J]&START_MASK);
-			if(TurboToggleJoypadStorage[J].Select) PadState^=(joypads[J]&SELECT_MASK);
-			if(TurboToggleJoypadStorage[J].Left  ) PadState^=(joypads[J]&LEFT_MASK);
-			if(TurboToggleJoypadStorage[J].Up    ) PadState^=(joypads[J]&UP_MASK);
-			if(TurboToggleJoypadStorage[J].Right ) PadState^=(joypads[J]&RIGHT_MASK);
-			if(TurboToggleJoypadStorage[J].Down  ) PadState^=(joypads[J]&DOWN_MASK);
-			if(TurboToggleJoypadStorage[J].Lid  ) PadState^=(joypads[J]&LID_MASK);
-			if(TurboToggleJoypadStorage[J].Debug ) PadState^=(joypads[J]&DEBUG_MASK);
-			//end turbo case...
-
-
-			// enforce left+right/up+down disallowance here to
-			// avoid recording unused l+r/u+d that will cause desyncs
-			// when played back with l+r/u+d is allowed
-			//if(!Settings.UpAndDown)
-			//{
-			//	if((PadState[1] & 2) != 0)
-			//		PadState[1] &= ~(1);
-			//	if((PadState[1] & 8) != 0)
-			//		PadState[1] &= ~(4);
-			//}
-
+		{
+			int PadState = 0;
+			PadState |= (!S9xGetState(Joypad[J].R))          ? R_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].L))          ? L_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].X))          ? X_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].A))          ? A_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Right))      ? RIGHT_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Right_Up))   ? RIGHT_MASK|UP_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Right_Down)) ? RIGHT_MASK|DOWN_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Left))       ? LEFT_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Left_Up))    ? LEFT_MASK|UP_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Left_Down))  ? LEFT_MASK|DOWN_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Down))       ? DOWN_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Up))         ? UP_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Start))      ? START_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Select))     ? SELECT_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Y))          ? Y_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].B))          ? B_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Lid))        ? LID_MASK : 0;
+			PadState |= (!S9xGetState(Joypad[J].Debug))      ? DEBUG_MASK : 0;
             joypads [J] = PadState | 0x80000000;
-        }
-        else
-            joypads [J] = 0;
-    }
-
-	// input from macro
-	//for (int J = 0; J < 8; J++)
-	//{
-	//	if(MacroIsEnabled(J))
-	//	{
-	//		uint16 userPadState = joypads[J] & 0xFFFF;
-	//		uint16 macroPadState = MacroInput(J);
-	//		uint16 newPadState;
-
-	//		switch(GUI.MacroInputMode)
-	//		{
-	//		case MACRO_INPUT_MOV:
-	//			newPadState = macroPadState;
-	//			break;
-	//		case MACRO_INPUT_OR:
-	//			newPadState = macroPadState | userPadState;
-	//			break;
-	//		case MACRO_INPUT_XOR:
-	//			newPadState = macroPadState ^ userPadState;
-	//			break;
-	//		default:
-	//			newPadState = userPadState;
-	//			break;
-	//		}
-
-	//		PadState[0] = (uint8) ( newPadState       & 0xFF);
-	//		PadState[1] = (uint8) ((newPadState >> 8) & 0xFF);
-
-	//		// enforce left+right/up+down disallowance here to
-	//		// avoid recording unused l+r/u+d that will cause desyncs
-	//		// when played back with l+r/u+d is allowed
-	//		if(!Settings.UpAndDown)
-	//		{
-	//			if((PadState[1] & 2) != 0)
-	//				PadState[1] &= ~(1);
-	//			if((PadState[1] & 8) != 0)
-	//				PadState[1] &= ~(4);
-	//		}
-
-	//		joypads [J] = PadState [0] | (PadState [1] << 8) | 0x80000000;
-	//	}
-	//}
-
-//#ifdef NETPLAY_SUPPORT
-//    if (Settings.NetPlay)
-//	{
-//		// Send joypad position update to server
-//		S9xNPSendJoypadUpdate (joypads [GUI.NetplayUseJoypad1 ? 0 : NetPlay.Player-1]);
-//
-//		// set input from network
-//		for (int J = 0; J < NP_MAX_CLIENTS; J++)
-//			joypads[J] = S9xNPGetJoypad (J);
-//	}
-//#endif
+		}
+	}
 }
 
-void input_feedback(BOOL enable)
-{
-	if (!Feedback) return;
-	if (!pEffect) return;
+//void S9xOldAutofireAndStuff ()
+//{
+//	// stuff ripped out of Snes9x that's no longer functional, at least for now
+//    for (int J = 0; J < 8; J++)
+//    {
+//        if (Joypad [J].Enabled)
+//        {
+//			// toggle checks
+//			{
+//       	     	PadState  = 0;
+//				PadState |= ToggleJoypadStorage[J].Left||TurboToggleJoypadStorage[J].Left			? LEFT_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Right||TurboToggleJoypadStorage[J].Right			? RIGHT_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Up||TurboToggleJoypadStorage[J].Up				? UP_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Down||TurboToggleJoypadStorage[J].Down			? DOWN_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Start||TurboToggleJoypadStorage[J].Start			? START_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Select||TurboToggleJoypadStorage[J].Select		? SELECT_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Lid||TurboToggleJoypadStorage[J].Lid				? LID_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Debug||TurboToggleJoypadStorage[J].Debug			? DEBUG_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].A||TurboToggleJoypadStorage[J].A					? A_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].B||TurboToggleJoypadStorage[J].B					? B_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].X||TurboToggleJoypadStorage[J].X					? X_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].Y||TurboToggleJoypadStorage[J].Y					? Y_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].L||TurboToggleJoypadStorage[J].L					? L_MASK : 0;
+//				PadState |= ToggleJoypadStorage[J].R||TurboToggleJoypadStorage[J].R				    ? R_MASK : 0;
+//			}
+//			// auto-hold AND regular key/joystick presses
+//			if(S9xGetState(Joypad[J+8].Left))
+//			{
+//				PadState ^= (!S9xGetState(Joypad[J].R)||!S9xGetState(Joypad[J+8].R))      ?  R_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].L)||!S9xGetState(Joypad[J+8].L))      ?  L_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].X)||!S9xGetState(Joypad[J+8].X))      ?  X_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].A)||!S9xGetState(Joypad[J+8].A))      ? A_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Right))  ?   RIGHT_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Right_Up))  ? RIGHT_MASK + UP_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Right_Down)) ? RIGHT_MASK + DOWN_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Left))   ?   LEFT_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Left_Up)) ?   LEFT_MASK + UP_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Left_Down)) ?  LEFT_MASK + DOWN_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Down))   ?   DOWN_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Up))     ?   UP_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Start)||!S9xGetState(Joypad[J+8].Start))  ?  START_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Select)||!S9xGetState(Joypad[J+8].Select)) ?  SELECT_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Y)||!S9xGetState(Joypad[J+8].Y))      ?  Y_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].B)||!S9xGetState(Joypad[J+8].B))      ? B_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Lid)||!S9xGetState(Joypad[J+8].Lid))      ?  LID_MASK : 0;
+//				PadState ^= (!S9xGetState(Joypad[J].Debug)||!S9xGetState(Joypad[J+8].Debug))      ? DEBUG_MASK : 0;
+//			}
+//
+//			bool turbofy = !S9xGetState(Joypad[J+8].Up); // All Mod for turbo
+//
+//			u32 TurboMask = 0;
+//
+//			//handle turbo case! (autofire / auto-fire)
+//			if(turbofy || ((TurboMask&A_MASK))&&(PadState&A_MASK) || !S9xGetState(Joypad[J+8].A      )) PadState^=(joypads[J]&A_MASK);
+//			if(turbofy || ((TurboMask&B_MASK))&&(PadState&B_MASK) || !S9xGetState(Joypad[J+8].B      )) PadState^=(joypads[J]&B_MASK);
+//			if(turbofy || ((TurboMask&Y_MASK))&&(PadState&Y_MASK) || !S9xGetState(Joypad[J+8].Y       )) PadState^=(joypads[J]&Y_MASK);
+//			if(turbofy || ((TurboMask&X_MASK))&&(PadState&X_MASK) || !S9xGetState(Joypad[J+8].X       )) PadState^=(joypads[J]&X_MASK);
+//			if(turbofy || ((TurboMask&L_MASK))&&(PadState&L_MASK) || !S9xGetState(Joypad[J+8].L       )) PadState^=(joypads[J]&L_MASK);
+//			if(turbofy || ((TurboMask&R_MASK))&&(PadState&R_MASK) || !S9xGetState(Joypad[J+8].R       )) PadState^=(joypads[J]&R_MASK);
+//			if(turbofy || ((TurboMask&START_MASK))&&(PadState&START_MASK) || !S9xGetState(Joypad[J+8].Start )) PadState^=(joypads[J]&START_MASK);
+//			if(turbofy || ((TurboMask&SELECT_MASK))&&(PadState&SELECT_MASK) || !S9xGetState(Joypad[J+8].Select)) PadState^=(joypads[J]&SELECT_MASK);
+//			if(turbofy || ((TurboMask&DEBUG_MASK))&&(PadState&DEBUG_MASK) || !S9xGetState(Joypad[J+8].Debug)) PadState^=(joypads[J]&DEBUG_MASK);
+//			if(           ((TurboMask&LEFT_MASK))&&(PadState&LEFT_MASK)                                    ) PadState^=(joypads[J]&LEFT_MASK);
+//			if(           ((TurboMask&UP_MASK))&&(PadState&UP_MASK)                                      ) PadState^=(joypads[J]&UP_MASK);
+//			if(           ((TurboMask&RIGHT_MASK))&&(PadState&RIGHT_MASK)                                   ) PadState^=(joypads[J]&RIGHT_MASK);
+//			if(           ((TurboMask&DOWN_MASK))&&(PadState&DOWN_MASK)                                    ) PadState^=(joypads[J]&DOWN_MASK);
+//			if(           ((TurboMask&LID_MASK))&&(PadState&LID_MASK)                                    ) PadState^=(joypads[J]&LID_MASK);
+//
+//			if(TurboToggleJoypadStorage[J].A     ) PadState^=(joypads[J]&A_MASK);
+//			if(TurboToggleJoypadStorage[J].B     ) PadState^=(joypads[J]&B_MASK);
+//			if(TurboToggleJoypadStorage[J].Y     ) PadState^=(joypads[J]&Y_MASK);
+//			if(TurboToggleJoypadStorage[J].X     ) PadState^=(joypads[J]&X_MASK);
+//			if(TurboToggleJoypadStorage[J].L     ) PadState^=(joypads[J]&L_MASK);
+//			if(TurboToggleJoypadStorage[J].R     ) PadState^=(joypads[J]&R_MASK);
+//			if(TurboToggleJoypadStorage[J].Start ) PadState^=(joypads[J]&START_MASK);
+//			if(TurboToggleJoypadStorage[J].Select) PadState^=(joypads[J]&SELECT_MASK);
+//			if(TurboToggleJoypadStorage[J].Left  ) PadState^=(joypads[J]&LEFT_MASK);
+//			if(TurboToggleJoypadStorage[J].Up    ) PadState^=(joypads[J]&UP_MASK);
+//			if(TurboToggleJoypadStorage[J].Right ) PadState^=(joypads[J]&RIGHT_MASK);
+//			if(TurboToggleJoypadStorage[J].Down  ) PadState^=(joypads[J]&DOWN_MASK);
+//			if(TurboToggleJoypadStorage[J].Lid  ) PadState^=(joypads[J]&LID_MASK);
+//			if(TurboToggleJoypadStorage[J].Debug ) PadState^=(joypads[J]&DEBUG_MASK);
+//			//end turbo case...
+//
+//
+//			// enforce left+right/up+down disallowance here to
+//			// avoid recording unused l+r/u+d that will cause desyncs
+//			// when played back with l+r/u+d is allowed
+//			//if(!allowUpAndDown)
+//			//{
+//			//	if((PadState[1] & 2) != 0)
+//			//		PadState[1] &= ~(1);
+//			//	if((PadState[1] & 8) != 0)
+//			//		PadState[1] &= ~(4);
+//			//}
+//
+//            joypads [J] = PadState | 0x80000000;
+//        }
+//        else
+//            joypads [J] = 0;
+//    }
+//
+//	// input from macro
+//	//for (int J = 0; J < 8; J++)
+//	//{
+//	//	if(MacroIsEnabled(J))
+//	//	{
+//	//		uint16 userPadState = joypads[J] & 0xFFFF;
+//	//		uint16 macroPadState = MacroInput(J);
+//	//		uint16 newPadState;
+//
+//	//		switch(GUI.MacroInputMode)
+//	//		{
+//	//		case MACRO_INPUT_MOV:
+//	//			newPadState = macroPadState;
+//	//			break;
+//	//		case MACRO_INPUT_OR:
+//	//			newPadState = macroPadState | userPadState;
+//	//			break;
+//	//		case MACRO_INPUT_XOR:
+//	//			newPadState = macroPadState ^ userPadState;
+//	//			break;
+//	//		default:
+//	//			newPadState = userPadState;
+//	//			break;
+//	//		}
+//
+//	//		PadState[0] = (uint8) ( newPadState       & 0xFF);
+//	//		PadState[1] = (uint8) ((newPadState >> 8) & 0xFF);
+//
+//	//		// enforce left+right/up+down disallowance here to
+//	//		// avoid recording unused l+r/u+d that will cause desyncs
+//	//		// when played back with l+r/u+d is allowed
+//	//		if(!allowUpAndDown)
+//	//		{
+//	//			if((PadState[1] & 2) != 0)
+//	//				PadState[1] &= ~(1);
+//	//			if((PadState[1] & 8) != 0)
+//	//				PadState[1] &= ~(4);
+//	//		}
+//
+//	//		joypads [J] = PadState [0] | (PadState [1] << 8) | 0x80000000;
+//	//	}
+//	//}
+//
+////#ifdef NETPLAY_SUPPORT
+////    if (Settings.NetPlay)
+////	{
+////		// Send joypad position update to server
+////		S9xNPSendJoypadUpdate (joypads [GUI.NetplayUseJoypad1 ? 0 : NetPlay.Player-1]);
+////
+////		// set input from network
+////		for (int J = 0; J < NP_MAX_CLIENTS; J++)
+////			joypads[J] = S9xNPGetJoypad (J);
+////	}
+////#endif
+//}
 
-	if (enable)
-		pEffect->Start(2, 0);
-	else
-		pEffect->Stop();
+void input_feedback(bool enable)
+{
+	
+	for(int C=0;C<16;C++)
+	{
+		if(!JoystickF[C].Attached) continue;
+		if(!JoystickF[C].FeedBack) continue;
+		if(!JoystickF[C].pEffect) continue;
+		
+		//printf("Joy%i Feedback %s\n", C, enable?"ON":"OFF");
+		if (enable)
+			JoystickF[C].pEffect->Start(2, 0);
+		else
+			JoystickF[C].pEffect->Stop();
+	}
+	
+	//use xinput if it is available!!
+	//but try lazy initializing xinput so that the dll is not required
+	{
+		static DWORD ( WINAPI *_XInputSetState)(DWORD,XINPUT_VIBRATION*) = NULL;
+		static bool xinput_tried = false;
+		if(!xinput_tried)
+		{
+			xinput_tried = true;
+			HMODULE lib = LoadLibrary("xinput1_3.dll");
+			if(lib)
+			{
+				_XInputSetState = (DWORD (WINAPI *)(DWORD,XINPUT_VIBRATION*))GetProcAddress(lib,"XInputSetState");
+			}
+		}
+		if(_XInputSetState)
+		{
+			XINPUT_VIBRATION vib;
+			vib.wLeftMotorSpeed = enable?65535:0;
+			vib.wRightMotorSpeed = enable?65535:0;
+			for(int i=0;i<4;i++)
+				_XInputSetState(0,&vib);
+		}
+	}
 }
 
 
@@ -2171,49 +2677,202 @@ void input_init()
 	
 	LoadInputConfig();
 	LoadHotkeyConfig();
+	LoadGuitarConfig();
+	LoadPianoConfig();
+	LoadPaddleConfig();
 
 	di_init();
 	FeedbackON = input_feedback;
 }
 
-void input_process()
+void input_deinit()
 {
+	input_feedback(false);
+
+	//todo
+	// release all dx input devices
+}
+
+// TODO: maybe some of this stuff should move back to NDSSystem.cpp?
+// I don't know which is the better place for it.
+
+static void StepManualTurbo();
+static void ApplyAntipodalRestriction(buttonstruct<bool>& pad);
+static void SetManualTurbo(buttonstruct<bool>& pad);
+static void RunAntipodalRestriction(const buttonstruct<bool>& pad);
+
+// may run multiple times per frame.
+// gets the user input and puts in a request with NDSSystem about it,
+// and updates input-related state that needs to update even while paused.
+void input_acquire()
+{
+	u32 oldInput = joypads[0];
+
 	S9xWinScanJoypads();
 
-	//not appropriate right now in desmume
-	//if (paused) return;
+	buttonstruct<bool> buttons = {};
+	buttons.R = (joypads[0] & RIGHT_MASK)!=0;
+	buttons.L = (joypads[0] & LEFT_MASK)!=0;
+	buttons.D = (joypads[0] & DOWN_MASK)!=0;
+	buttons.U = (joypads[0] & UP_MASK)!=0;
+	buttons.S = (joypads[0] & START_MASK)!=0;
+	buttons.T = (joypads[0] & SELECT_MASK)!=0;
+	buttons.B = (joypads[0] & B_MASK)!=0;
+	buttons.A = (joypads[0] & A_MASK)!=0;
+	buttons.Y = (joypads[0] & Y_MASK)!=0;
+	buttons.X = (joypads[0] & X_MASK)!=0;
+	buttons.W = (joypads[0] & L_MASK)!=0;
+	buttons.E = (joypads[0] & R_MASK)!=0;
+	buttons.G = (joypads[0] & DEBUG_MASK)!=0;
+	buttons.F = (joypads[0] & LID_MASK)!=0;
 
-	bool R = joypads[0] & RIGHT_MASK;
-	bool L = joypads[0] & LEFT_MASK;
-	bool D = joypads[0] & DOWN_MASK;
-	bool U = joypads[0] & UP_MASK;
-	bool T = joypads[0] & START_MASK;
-	bool S = joypads[0] & SELECT_MASK;
-	bool B = joypads[0] & B_MASK;
-	bool A = joypads[0] & A_MASK;
-	bool Y = joypads[0] & Y_MASK;
-	bool X = joypads[0] & X_MASK;
-	bool W = joypads[0] & L_MASK;
-	bool E = joypads[0] & R_MASK;
-	bool G = joypads[0] & DEBUG_MASK;
-	bool F = joypads[0] & LID_MASK;
+	// take care of toggling the auto-hold flags.
+	if(AutoHoldPressed)
+	{
+		if(buttons.R && !(oldInput & RIGHT_MASK))  AutoHold.R ^= true;
+		if(buttons.L && !(oldInput & LEFT_MASK))   AutoHold.L ^= true;
+		if(buttons.D && !(oldInput & DOWN_MASK))   AutoHold.D ^= true;
+		if(buttons.U && !(oldInput & UP_MASK))     AutoHold.U ^= true;
+		if(buttons.S && !(oldInput & START_MASK))  AutoHold.S ^= true;
+		if(buttons.T && !(oldInput & SELECT_MASK)) AutoHold.T ^= true;
+		if(buttons.B && !(oldInput & B_MASK))      AutoHold.B ^= true;
+		if(buttons.A && !(oldInput & A_MASK))      AutoHold.A ^= true;
+		if(buttons.Y && !(oldInput & Y_MASK))      AutoHold.Y ^= true;
+		if(buttons.X && !(oldInput & X_MASK))      AutoHold.X ^= true;
+		if(buttons.W && !(oldInput & L_MASK))      AutoHold.W ^= true;
+		if(buttons.E && !(oldInput & R_MASK))      AutoHold.E ^= true;
+	}
 
-	if(AutoHoldPressed && R) AutoHold.Right  ^= true;
-	if(AutoHoldPressed && L) AutoHold.Left   ^= true;
-	if(AutoHoldPressed && D) AutoHold.Down   ^= true;
-	if(AutoHoldPressed && U) AutoHold.Up     ^= true;
-	if(AutoHoldPressed && T) AutoHold.Select ^= true;
-	if(AutoHoldPressed && S) AutoHold.Start  ^= true;
-	if(AutoHoldPressed && B) AutoHold.B      ^= true;
-	if(AutoHoldPressed && A) AutoHold.A      ^= true;
-	if(AutoHoldPressed && Y) AutoHold.Y      ^= true;
-	if(AutoHoldPressed && X) AutoHold.X      ^= true;
-	if(AutoHoldPressed && W) AutoHold.L      ^= true;
-	if(AutoHoldPressed && E) AutoHold.R      ^= true;
+	// update upAndDown timers
+	RunAntipodalRestriction(buttons);
 
-	NDS_setPad( R, L, D, U, T, S, B, A, Y, X, W, E, G, F);
+	// apply any autofire that requires the user to be
+	// actively holding a button in order to trigger it
+	SetManualTurbo(buttons);
 
+	// let's actually apply auto-hold here too,
+	// even though this is supposed to be the "raw" user input,
+	// since things seem to work out better this way (more useful input display, for one thing),
+	// and it kind of makes sense to think of auto-held keys as
+	// a direct extension of what the user is physically trying to press.
+	for(int i = 0; i < ARRAY_SIZE(buttons.array); i++)
+		buttons.array[i] ^= AutoHold.array[i];
+
+
+	// set initial input request
+	NDS_setPad(
+		buttons.R, buttons.L, buttons.D, buttons.U,
+		buttons.T, buttons.S, buttons.B, buttons.A,
+		buttons.Y, buttons.X, buttons.W, buttons.E,
+		buttons.G, buttons.F);
+
+
+	// TODO: this part hasn't been revised yet,
+	// but guitarGrip_setKey should only request a change (like NDS_setPad does)
+	if (Guitar.Enabled)
+	{
+		bool gG=!S9xGetState(Guitar.GREEN);
+		bool gR=!S9xGetState(Guitar.RED);
+		bool gY=!S9xGetState(Guitar.YELLOW);
+		bool gB=!S9xGetState(Guitar.BLUE);
+		guitarGrip_setKey(gG, gR, gY, gB);
+	}
+
+	//etc. same as above
+	if (Piano.Enabled)
+	{
+		bool c=!S9xGetState(Piano.C);
+		bool cs=!S9xGetState(Piano.CS);
+		bool d=!S9xGetState(Piano.D);
+		bool ds=!S9xGetState(Piano.DS);
+		bool e=!S9xGetState(Piano.E);
+		bool f=!S9xGetState(Piano.F);
+		bool fs=!S9xGetState(Piano.FS);
+		bool g=!S9xGetState(Piano.G);
+		bool gs=!S9xGetState(Piano.GS);
+		bool a=!S9xGetState(Piano.A);
+		bool as=!S9xGetState(Piano.AS);
+		bool b=!S9xGetState(Piano.B);
+		bool hic=!S9xGetState(Piano.HIC);
+		piano_setKey(c,cs,d,ds,e,f,fs,g,gs,a,as,b,hic);
+	}
+
+	if (Paddle.Enabled)
+	{
+		bool dec = !S9xGetState(Paddle.DEC);
+		bool inc = !S9xGetState(Paddle.INC);
+		if (inc) nds.paddle += 5;
+		if (dec) nds.paddle -= 5;
+	}
 }
+
+// only runs once per frame (always after input_acquire has been called at least once).
+// applies transformations to the user's input,
+// and updates input-related state that needs to update once per frame.
+void input_process()
+{
+	UserButtons& input = NDS_getProcessingUserInput().buttons;
+
+	// prevent left+right/up+down if that option is set to not allow it
+	ApplyAntipodalRestriction(input);
+
+	// step turbo frame timers
+	StepManualTurbo();
+
+	// TODO: things like macros or "hands free" turbo/autofire
+	// should probably be applied here.
+}
+
+static bool turbo[4] = {true, false, true, false};
+
+static void StepManualTurbo()
+{
+	for (int i = 0; i < ARRAY_SIZE(TurboTime.array); i++)
+	{
+		TurboTime.array[i]++;
+		if(!Turbo.array[i] || TurboTime.array[i] >= (int)ARRAY_SIZE(turbo))
+			TurboTime.array[i] = 0; // reset timer if the button isn't pressed or we overran
+	}
+}
+
+static void SetManualTurbo(buttonstruct<bool>& pad)
+{
+	for (int i = 0; i < ARRAY_SIZE(pad.array); i++)
+		if(Turbo.array[i])
+			pad.array[i] = turbo[TurboTime.array[i]];
+}
+
+static buttonstruct<int> cardinalHeldTime = {0};
+
+static void RunAntipodalRestriction(const buttonstruct<bool>& pad)
+{
+	if(allowUpAndDown)
+		return;
+
+	pad.U ? (cardinalHeldTime.U++) : (cardinalHeldTime.U=0);
+	pad.D ? (cardinalHeldTime.D++) : (cardinalHeldTime.D=0);
+	pad.L ? (cardinalHeldTime.L++) : (cardinalHeldTime.L=0);
+	pad.R ? (cardinalHeldTime.R++) : (cardinalHeldTime.R=0);
+}
+static void ApplyAntipodalRestriction(buttonstruct<bool>& pad)
+{
+	if(allowUpAndDown)
+		return;
+
+	// give preference to whichever direction was most recently pressed
+	if(pad.U && pad.D)
+		if(cardinalHeldTime.U < cardinalHeldTime.D)
+			pad.D = false;
+		else
+			pad.U = false;
+	if(pad.L && pad.R)
+		if(cardinalHeldTime.L < cardinalHeldTime.R)
+			pad.R = false;
+		else
+			pad.L = false;
+}
+
+
 
 static void set_hotkeyinfo(HWND hDlg)
 {
@@ -2258,10 +2917,13 @@ switch(msg)
 
 			EndPaint (hDlg, &ps);
 		}
-		return true;
+		return TRUE;
 	case WM_INITDIALOG:
 		//if(DirectX.Clipped) S9xReRefresh();
-		SetWindowText(hDlg,HOTKEYS_TITLE);
+		// Support Unicode display
+		wchar_t menuItemString[256];
+		LoadStringW(hAppInst, ID_HOTKEYS_TITLE, menuItemString, 256);
+		SetWindowTextW(hDlg, menuItemString);
 
 		// insert hotkey page list items
 		for(i = 0 ; i < NUM_HOTKEY_PAGE ; i++)
@@ -2278,7 +2940,8 @@ switch(msg)
 			GetAsyncKeyState(i);
 		}
 
-		SetDlgItemText(hDlg,IDC_LABEL_BLUE,HOTKEYS_LABEL_BLUE);
+		// Support Unicode display
+		SetDlgItemTextW(hDlg,IDC_LABEL_BLUE,(LPWSTR)HOTKEYS_LABEL_BLUE);
 
 		set_hotkeyinfo(hDlg);
 
@@ -2287,8 +2950,8 @@ switch(msg)
 		SetFocus(GetDlgItem(hDlg,IDC_HKCOMBO));
 
 
-		return true;
-		break;
+		return TRUE;
+
 	case WM_CLOSE:
 		EndDialog(hDlg, 0);
 		return TRUE;
@@ -2328,7 +2991,7 @@ switch(msg)
 		PostMessage(hDlg,WM_NEXTDLGCTL,0,0);
 //		PostMessage(hDlg,WM_KILLFOCUS,0,0);
 	}
-		return true;
+		return TRUE;
 	case WM_COMMAND:
 		switch(LOWORD(wParam))
 		{
@@ -2363,12 +3026,12 @@ switch(msg)
 
 void RunInputConfig()
 {
-	DialogBox(hAppInst, MAKEINTRESOURCE(IDD_INPUTCONFIG), MainWindow->getHWnd(), DlgInputConfig);
+	DialogBoxW(hAppInst, MAKEINTRESOURCEW(IDD_INPUTCONFIG), MainWindow->getHWnd(), DlgInputConfig);
 }
 
 void RunHotkeyConfig()
 {
-	DialogBox(hAppInst, MAKEINTRESOURCE(IDD_KEYCUSTOM), MainWindow->getHWnd(), DlgHotkeyConfig);
+	DialogBoxW(hAppInst, MAKEINTRESOURCEW(IDD_KEYCUSTOM), MainWindow->getHWnd(), DlgHotkeyConfig);
 }
 
 

@@ -1,28 +1,27 @@
 /*	snddx.cpp
-	
 	Copyright (C) 2005-2007 Theo Berkau
-	Copyright (C) 2008-2009 DeSmuME team
+	Copyright (C) 2006-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <winsock2.h>
+#include "snddx.h"
+
 #include <stdio.h>
+#include <Windows.h>
 #include "directx/dsound.h"
+
 #ifdef __MINGW32__
 // I have to do this because for some reason because the dxerr8.h header is fubared
 const char*  __stdcall DXGetErrorString8A(HRESULT hr);
@@ -32,8 +31,8 @@ const char*  __stdcall DXGetErrorDescription8A(HRESULT hr);
 #else
 #include "directx/dxerr8.h"
 #endif
-#include "SPU.h"
-#include "snddx.h"
+
+#include "../SPU.h"
 #include "CWindow.h"
 #include "windriver.h"
 
@@ -44,6 +43,7 @@ u32 SNDDXGetAudioSpace();
 void SNDDXMuteAudio();
 void SNDDXUnMuteAudio();
 void SNDDXSetVolume(int volume);
+void SNDDXClearAudioBuffer();
 
 SoundInterface_struct SNDDIRECTX = {
 	SNDCORE_DIRECTX,
@@ -54,7 +54,8 @@ SoundInterface_struct SNDDIRECTX = {
 	SNDDXGetAudioSpace,
 	SNDDXMuteAudio,
 	SNDDXUnMuteAudio,
-	SNDDXSetVolume
+	SNDDXSetVolume,
+	SNDDXClearAudioBuffer,
 };
 
 LPDIRECTSOUND8 lpDS8;
@@ -62,18 +63,18 @@ LPDIRECTSOUNDBUFFER lpDSB, lpDSB2;
 
 extern WINCLASS	*MainWindow;
 
-static s16 *stereodata16;
+static s16 *stereodata16=0;
 static u32 soundoffset=0;
 static u32 soundbufsize;
 static LONG soundvolume;
 static int issoundmuted;
+static bool insilence;
+static int samplecounter_fakecontribution = 0;
 
 //////////////////////////////////////////////////////////////////////////////
-
 static volatile bool doterminate;
 static volatile bool terminated;
 
-extern CRITICAL_SECTION win_sync;
 extern volatile int win_sound_samplecounter;
 
 DWORD WINAPI SNDDXThread( LPVOID )
@@ -97,14 +98,14 @@ int SNDDXInit(int buffersize)
 	HRESULT ret;
 	char tempstr[512];
 
-	if ((ret = DirectSoundCreate8(NULL, &lpDS8, NULL)) != DS_OK)
+	if (FAILED(ret = DirectSoundCreate8(NULL, &lpDS8, NULL)))
 	{
 		sprintf(tempstr, "DirectSound8Create error: %s - %s", DXGetErrorString8(ret), DXGetErrorDescription8(ret));
 		MessageBox (NULL, tempstr, "Error",  MB_OK | MB_ICONINFORMATION);
 		return -1;
 	}
 
-	if ((ret = IDirectSound8_SetCooperativeLevel(lpDS8, MainWindow->getHWnd(), DSSCL_PRIORITY)) != DS_OK)
+	if (FAILED(ret = lpDS8->SetCooperativeLevel(MainWindow->getHWnd(), DSSCL_PRIORITY)))
 	{
 		sprintf(tempstr, "IDirectSound8_SetCooperativeLevel error: %s - %s", DXGetErrorString8(ret), DXGetErrorDescription8(ret));
 		MessageBox (NULL, tempstr, "Error",  MB_OK | MB_ICONINFORMATION);
@@ -117,24 +118,25 @@ int SNDDXInit(int buffersize)
 	dsbdesc.dwBufferBytes = 0;
 	dsbdesc.lpwfxFormat = NULL;
 
-	if ((ret = IDirectSound8_CreateSoundBuffer(lpDS8, &dsbdesc, &lpDSB, NULL)) != DS_OK)
+	if (FAILED(ret = lpDS8->CreateSoundBuffer(&dsbdesc, &lpDSB, NULL)))
 	{
 		sprintf(tempstr, "Error when creating primary sound buffer: %s - %s", DXGetErrorString8(ret), DXGetErrorDescription8(ret));
 		MessageBox (NULL, tempstr, "Error",  MB_OK | MB_ICONINFORMATION);
 		return -1;
 	}
 
-	soundbufsize = buffersize * 2 * 2;
+	soundbufsize = buffersize * 2; // caller already multiplies buffersize by 2
+	soundoffset = 0;
 
 	memset(&wfx, 0, sizeof(wfx));
 	wfx.wFormatTag = WAVE_FORMAT_PCM;
 	wfx.nChannels = 2;
-	wfx.nSamplesPerSec = 44100;
+	wfx.nSamplesPerSec = DESMUME_SAMPLE_RATE;
 	wfx.wBitsPerSample = 16;
 	wfx.nBlockAlign = (wfx.wBitsPerSample / 8) * wfx.nChannels;
 	wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
 
-	if ((ret = IDirectSoundBuffer8_SetFormat(lpDSB, &wfx)) != DS_OK)
+	if (FAILED(ret = lpDSB->SetFormat(&wfx)))
 	{
 		sprintf(tempstr, "IDirectSoundBuffer8_SetFormat error: %s - %s", DXGetErrorString8(ret), DXGetErrorDescription8(ret));
 		MessageBox (NULL, tempstr, "Error",  MB_OK | MB_ICONINFORMATION);
@@ -149,7 +151,7 @@ int SNDDXInit(int buffersize)
 	dsbdesc.dwBufferBytes = soundbufsize;
 	dsbdesc.lpwfxFormat = &wfx;
 
-	if ((ret = IDirectSound8_CreateSoundBuffer(lpDS8, &dsbdesc, &lpDSB2, NULL)) != DS_OK)
+	if (FAILED(ret = lpDS8->CreateSoundBuffer(&dsbdesc, &lpDSB2, NULL)))
 	{
 		if (ret == DSERR_CONTROLUNAVAIL ||
 			ret == DSERR_INVALIDCALL ||
@@ -161,7 +163,7 @@ int SNDDXInit(int buffersize)
 				DSBCAPS_CTRLVOLUME | DSBCAPS_GETCURRENTPOSITION2 |
 				DSBCAPS_LOCSOFTWARE;
 
-			if ((ret = IDirectSound8_CreateSoundBuffer(lpDS8, &dsbdesc, &lpDSB2, NULL)) != DS_OK)
+			if (FAILED(ret = lpDS8->CreateSoundBuffer(&dsbdesc, &lpDSB2, NULL)))
 			{
 				sprintf(tempstr, "Error when creating secondary sound buffer: %s - %s", DXGetErrorString8(ret), DXGetErrorDescription8(ret));
 				MessageBox (NULL, tempstr, "Error",  MB_OK | MB_ICONINFORMATION);
@@ -176,9 +178,9 @@ int SNDDXInit(int buffersize)
 		}
 	}
 
-	IDirectSoundBuffer8_Play(lpDSB2, 0, 0, DSBPLAY_LOOPING);
+	lpDSB2->Play(0, 0, DSBPLAY_LOOPING);
 
-	if ((stereodata16 = (s16 *)malloc(soundbufsize)) == NULL)
+	if ((stereodata16 = new s16[soundbufsize / sizeof(s16)]) == NULL)
 		return -1;
 
 	memset(stereodata16, 0, soundbufsize);
@@ -200,95 +202,149 @@ void SNDDXDeInit()
 	DWORD status=0;
 
 	doterminate = true;
-	while(!terminated) {
+	while(!terminated)
 		Sleep(1);
-	}
+	terminated = false;
 
 	if (lpDSB2)
 	{
-		IDirectSoundBuffer8_GetStatus(lpDSB2, &status);
+		lpDSB2->GetStatus(&status);
 
 		if(status == DSBSTATUS_PLAYING)
-			IDirectSoundBuffer8_Stop(lpDSB2);
+			lpDSB2->Stop();
 
-		IDirectSoundBuffer8_Release(lpDSB2);
+		lpDSB2->Release();
 		lpDSB2 = NULL;
 	}
 
 	if (lpDSB)
 	{
-		IDirectSoundBuffer8_Release(lpDSB);
+		lpDSB->Release();
 		lpDSB = NULL;
 	}
 
 	if (lpDS8)
 	{
-		IDirectSound8_Release(lpDS8);
+		lpDS8->Release();
 		lpDS8 = NULL;
 	}
+
+	delete stereodata16;
+	stereodata16=0;
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 void SNDDXUpdateAudio(s16 *buffer, u32 num_samples)
 {
-	LPVOID buffer1;
-	LPVOID buffer2;
-	DWORD buffer1_size, buffer2_size;
-	DWORD status;
-
 	int samplecounter;
 	{
 		Lock lock;
-		samplecounter = win_sound_samplecounter -= num_samples;
+		if(num_samples)
+		{
+			samplecounter = win_sound_samplecounter -= num_samples - samplecounter_fakecontribution;
+			samplecounter_fakecontribution = 0;
+		}
+		else
+		{
+			samplecounter = win_sound_samplecounter -= DESMUME_SAMPLE_RATE/180;
+			samplecounter_fakecontribution += DESMUME_SAMPLE_RATE/180;
+		}
 	}
 
-	bool silence = (samplecounter<-44100*15/60); //behind by more than a quarter second -> silence
+	bool silence = (samplecounter<-DESMUME_SAMPLE_RATE*15/60); //behind by more than a quarter second -> silence
 
-	IDirectSoundBuffer8_GetStatus(lpDSB2, &status);
-
-	if (status & DSBSTATUS_BUFFERLOST)
-		return; // fix me
-
-	IDirectSoundBuffer8_Lock(lpDSB2, soundoffset, num_samples * sizeof(s16) * 2, &buffer1, &buffer1_size, &buffer2, &buffer2_size, 0);
-
-	if(silence) {
-		memset(buffer1, 0, buffer1_size);
-		if(buffer2)
-			memset(buffer2, 0, buffer2_size);
+	if(insilence)
+	{
+		if(silence)
+			return;
+		else
+			insilence = false;
 	}
 	else
 	{
-		memcpy(buffer1, buffer, buffer1_size);
-		if (buffer2)
-			memcpy(buffer2, ((u8 *)buffer)+buffer1_size, buffer2_size);
+		if(silence)
+		{
+#ifndef PUBLIC_RELEASE
+			extern volatile bool execute;
+			if(execute)
+				printf("snddx: emergency cleared sound buffer. (%d, %d, %d)\n", win_sound_samplecounter, num_samples, samplecounter_fakecontribution);
+#endif
+			samplecounter_fakecontribution = 0;
+			insilence = true;
+			SNDDXClearAudioBuffer();
+			return;
+		}
 	}
+
+	LPVOID buffer1;
+	LPVOID buffer2;
+	DWORD buffer1_size, buffer2_size;
+
+	HRESULT hr = lpDSB2->Lock(soundoffset, num_samples * sizeof(s16) * 2,
+	                          &buffer1, &buffer1_size, &buffer2, &buffer2_size, 0);
+	if(FAILED(hr))
+	{
+		if(hr == DSBSTATUS_BUFFERLOST)
+			lpDSB2->Restore();
+		return;
+	}
+
+	memcpy(buffer1, buffer, buffer1_size);
+	if(buffer2)
+		memcpy(buffer2, ((u8 *)buffer)+buffer1_size, buffer2_size);
 
 	soundoffset += buffer1_size + buffer2_size;
 	soundoffset %= soundbufsize;
 
-	IDirectSoundBuffer8_Unlock(lpDSB2, buffer1, buffer1_size, buffer2, buffer2_size);
+	lpDSB2->Unlock(buffer1, buffer1_size, buffer2, buffer2_size);
 }
 
+
+
+void SNDDXClearAudioBuffer()
+{
+	// we shouldn't need to provide 2 buffers since it's 1 contiguous range
+	// but maybe newer directsound implementations have issues
+	LPVOID buffer1;
+	LPVOID buffer2;
+	DWORD buffer1_size, buffer2_size;
+	HRESULT hr = lpDSB2->Lock(0, 0, &buffer1, &buffer1_size, &buffer2, &buffer2_size, DSBLOCK_ENTIREBUFFER);
+	if(FAILED(hr))
+		return;
+	memset(buffer1, 0, buffer1_size);
+	if(buffer2)
+		memset(buffer2, 0, buffer2_size);
+	lpDSB2->Unlock(buffer1, buffer1_size, buffer2, buffer2_size);
+}
+
+
+
 //////////////////////////////////////////////////////////////////////////////
+
+static inline u32 circularDist(u32 from, u32 to, u32 size)
+{
+	if(size == 0)
+		return 0;
+	s32 diff = (s32)(to - from);
+	while(diff < 0)
+		diff += size;
+	return (u32)diff;
+}
 
 u32 SNDDXGetAudioSpace()
 {
 	DWORD playcursor, writecursor;
-	u32 freespace=0;
-
-	if (IDirectSoundBuffer8_GetCurrentPosition (lpDSB2, &playcursor, &writecursor) != DS_OK)
+	if(FAILED(lpDSB2->GetCurrentPosition(&playcursor, &writecursor)))
 		return 0;
 
-	if (soundoffset > playcursor)
-		freespace = soundbufsize - soundoffset + playcursor;
-	else
-		freespace = playcursor - soundoffset;
+	u32 curToWrite = circularDist(soundoffset, writecursor, soundbufsize);
+	u32 curToPlay = circularDist(soundoffset, playcursor, soundbufsize);
 
-	//   if (freespace > 512)
-	return (freespace / 2 / 2);
-	//   else
-	//      return 0;
+	if(curToWrite < curToPlay)
+		return 0; // in-between the two cursors. we shouldn't write anything during this time.
+
+	return curToPlay / (sizeof(s16) * 2);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -296,7 +352,7 @@ u32 SNDDXGetAudioSpace()
 void SNDDXMuteAudio()
 {
 	issoundmuted = 1;
-	IDirectSoundBuffer8_SetVolume (lpDSB2, DSBVOLUME_MIN);
+	lpDSB2->SetVolume(DSBVOLUME_MIN);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -304,17 +360,25 @@ void SNDDXMuteAudio()
 void SNDDXUnMuteAudio()
 {
 	issoundmuted = 0;
-	IDirectSoundBuffer8_SetVolume (lpDSB2, soundvolume);
+	lpDSB2->SetVolume(soundvolume);
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 void SNDDXSetVolume(int volume)
 {
-	if (!lpDSB2) return ;     /* might happen when changing sounddevice on the fly, caused a gpf */
-	soundvolume = (((LONG)volume) - 100) * 100;
+	if (!lpDSB2) return ;     //might happen when changing sounddevice on the fly, caused a gpf
+
+	if(volume==0)
+		soundvolume = DSBVOLUME_MIN;
+	else
+	{
+		float attenuate = 1000 * (float)log(100.0f/volume);
+		soundvolume = -(int)attenuate;
+	}
+	
 	if (!issoundmuted)
-		IDirectSoundBuffer8_SetVolume (lpDSB2, soundvolume);
+		lpDSB2->SetVolume(soundvolume);
 }
 
 //////////////////////////////////////////////////////////////////////////////

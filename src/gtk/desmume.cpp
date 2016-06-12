@@ -1,6 +1,6 @@
 /* desmume.c - this file is part of DeSmuME
  *
- * Copyright (C) 2006,2007 DeSmuME Team
+ * Copyright (C) 2006-2015 DeSmuME Team
  * Copyright (C) 2007 Pascal Giard (evilynux)
  *
  * This file is free software; you can redistribute it and/or modify
@@ -19,72 +19,54 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#include "types.h"
-#include "NDSSystem.h"
-#include "SPU.h"
-#include "sndsdl.h"
-#include "ctrlssdl.h"
-#include "desmume.h"
-#include "movie.h"
 
-volatile BOOL execute = FALSE;
+#include "desmume.h"
+
+#include "../NDSSystem.h"
+#include "../SPU.h"
+#include "../sndsdl.h"
+#include "../movie.h"
+
+volatile bool execute = false;
 BOOL click = FALSE;
 
-void desmume_init( struct armcpu_memory_iface *arm9_mem_if,
-                   struct armcpu_ctrl_iface **arm9_ctrl_iface,
-                   struct armcpu_memory_iface *arm7_mem_if,
-                   struct armcpu_ctrl_iface **arm7_ctrl_iface,
-                   int disable_sound)
+void desmume_init( int disable_sound)
 {
-#ifdef GDB_STUB
-	NDS_Init( arm9_mem_if, arm9_ctrl_iface,
-                  arm7_mem_if, arm7_ctrl_iface);
-#else
-        NDS_Init();
-#endif
-        if ( !disable_sound) {
-          SPU_ChangeSoundCore(SNDCORE_SDL, 735 * 4);
-        }
-	execute = FALSE;
+	NDS_Init();
+	
+	if ( !disable_sound) {
+		SPU_ChangeSoundCore(SNDCORE_SDL, 735 * 4);
+	}
+	execute = false;
 }
 
 void desmume_free( void)
 {
-	execute = FALSE;
+	execute = false;
 	NDS_DeInit();
 }
 
 void desmume_pause( void)
 {
-	execute = FALSE;
+	execute = false;
 	SPU_Pause(1);
 }
 void desmume_resume( void)
 {
-	execute = TRUE;
+	execute = true;
 	SPU_Pause(0);
 }
 void desmume_toggle( void)
 {
-	execute = (execute) ? FALSE : TRUE;
+	execute ^= true;
 }
-BOOL desmume_running( void)
+bool desmume_running( void)
 {
 	return execute;
 }
 
 void desmume_cycle( void)
 {
-  u16 keypad;
-
-  /* Joystick events */
-  /* Retrieve old value: can use joysticks w/ another device (from our side) */
-  keypad = get_keypad();
-  /* Look for queued events */
-  process_joystick_events( &keypad);
-  /* Update keypad value */
-  update_keypad(keypad);
-
   FCEUMOV_AddInputState();
   NDS_exec<false>();
   SPU_Emulate_user();

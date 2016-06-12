@@ -1,5 +1,23 @@
 //RamSearch dialog was copied and adapted from GENS11: http://code.google.com/p/gens-rerecording/
-//Authors: Upthorn, Nitsuja, adelikat
+//Authors: Nitsuja, Upthorn, adelikat
+
+/*
+	Modifications Copyright (C) 2009-2015 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 
 // A few notes about this implementation of a RAM search window:
 //
@@ -8,6 +26,8 @@
 // update every single value in RAM every single frame, and
 // keep track of the exact number of frames across which each value has changed,
 // without causing the emulation to run noticeably slower than normal.
+// [note: in DeSmuME it is noticeably slower because the emulation is already only barely fast enough.
+//  but especially after narrowing down the search results a little, it's still decently fast.]
 //
 // The data representation was changed from one entry per valid address
 // to one entry per contiguous range of uneliminated addresses
@@ -27,19 +47,22 @@
 // during these sporadic "setup" steps to achieve an all-around faster per-update speed.
 // (You can test this case by performing the search: Modulo 2 Is Specific Address 0)
 
-#include "resource.h"
-
-#include "common.h"
-#include "main.h"
-#include "NDSSystem.h"
+#include "ram_search.h"
 #include "ramwatch.h"
 
-#include "ram_search.h"
 #include <assert.h>
 #include <commctrl.h>
-#include "ramwatch.h"
 #include <list>
 #include <vector>
+
+#include "../common.h"
+#include "../NDSSystem.h"
+#include "../MMU.h"
+
+#include "resource.h"
+#include "main.h"
+#include "cheatsWin.h"
+
 #ifdef _WIN32
    #include "BaseTsd.h"
    typedef INT_PTR intptr_t;
@@ -51,7 +74,7 @@ HWND RamSearchHWnd = NULL;
 
 extern HWND RamWatchHWnd;
 
-extern char Str_Tmp[1024];
+static char Str_Tmp[1024];
 
 int Rom_Size; //TODO
 unsigned char* Rom_Data; //TODO
@@ -61,7 +84,8 @@ struct MemoryRegion
 	unsigned int hardwareAddress; // hardware address of the start of this region
 	unsigned int size; // number of bytes to the end of this region
 	unsigned char* softwareAddress; // pointer to the start of the live emulator source values for this region
-	BOOL byteSwapped; // true if this is a byte-swapped region of memory
+	//BOOL byteSwapped; // true if this is a byte-swapped region of memory
+	BOOL isDtcm;
 
 	unsigned int virtualIndex; // index into s_prevValues, s_curValues, and s_numChanges, valid after being initialized in ResetMemoryRegions()
 	unsigned int itemIndex; // index into listbox items, valid when s_itemIndicesInvalid is false
@@ -77,7 +101,9 @@ static BOOL s_itemIndicesInvalid = true; // if true, the link from listbox items
 static BOOL s_prevValuesNeedUpdate = true; // if true, the "prev" values should be updated using the "cur" values on the next frame update signaled
 static unsigned int s_maxItemIndex = 0; // max currently valid item index, the listbox sometimes tries to update things past the end of the list so we need to know this to ignore those attempts
 
-static const MemoryRegion s_prgRegion    = {  0x02000000, 0x400000, (unsigned char*)ARM9Mem.MAIN_MEM,     false};
+static const MemoryRegion s_mainMemRegion = {  0x02000000, 0x400000, (unsigned char*)MMU.MAIN_MEM,     false};
+static const MemoryRegion s_dtcmRegion    = {  0x027C0000,   0x4000, (unsigned char*)MMU.ARM9_DTCM,     true};
+static const MemoryRegion s_itcmRegion    = {  0x01000000,   0x8000, (unsigned char*)MMU.ARM9_ITCM,    false};
 
 /*
 static const MemoryRegion s_prgRegion    = {  0x020000, SEGACD_RAM_PRG_SIZE, (unsigned char*)Ram_Prg,     true};
@@ -112,8 +138,10 @@ void ResetMemoryRegions()
 //	Clear_Sound_Buffer();
 
 	s_activeMemoryRegions.clear();
-		
-	s_activeMemoryRegions.push_back(s_prgRegion);
+
+	s_activeMemoryRegions.push_back(s_mainMemRegion);
+	s_activeMemoryRegions.push_back(s_itcmRegion);
+	s_activeMemoryRegions.push_back(s_dtcmRegion);
 	
 	/*if(Genesis_Started || _32X_Started || SegaCD_Started)
 	{
@@ -135,10 +163,10 @@ void ResetMemoryRegions()
 	{
 		MemoryRegion& region = *iter;
 		region.virtualIndex = nextVirtualIndex;
-		assert(((intptr_t)region.softwareAddress & 1) == 0 && "somebody need to reimplement ReadValueAtSoftwareAddress()");
+		assert(((intptr_t)region.softwareAddress & 1) == 0 && "somebody needs to reimplement ReadValueAtSoftwareAddress()");
 		nextVirtualIndex = region.virtualIndex + region.size;
 	}
-//	assert(nextVirtualIndex <= MAX_RAM_SIZE); TODO
+	assert(nextVirtualIndex <= MAX_RAM_SIZE);
 }
 
 // eliminates a range of hardware addresses from the search results
@@ -181,7 +209,7 @@ int DeactivateRegion(MemoryRegion& region, MemoryList::iterator& iter, unsigned 
 	{
 		// split region
 		int eraseSize = (hardwareAddress + size) - region.hardwareAddress;
-		MemoryRegion region2 = {region.hardwareAddress + eraseSize, region.size - eraseSize, region.softwareAddress + eraseSize, region.byteSwapped, region.virtualIndex + eraseSize};
+		MemoryRegion region2 = {region.hardwareAddress + eraseSize, region.size - eraseSize, region.softwareAddress + eraseSize, /*region.byteSwapped,*/ region.isDtcm, region.virtualIndex + eraseSize};
 		region.size = hardwareAddress - region.hardwareAddress;
 		iter = s_activeMemoryRegions.insert(++iter, region2);
 		s_itemIndicesInvalid = TRUE;
@@ -277,11 +305,11 @@ void UpdateRegionT(const MemoryRegion& region, const MemoryRegion* nextRegionPtr
 					if(i >= indexEnd+k)
 						continue;
 					int m = (j-k+sizeof(compareType)) & (sizeof(compareType)-1);
-					if(nextValidChange[m]+sizeof(compareType) <= i+sizeof(compareType)) // if we didn't already increase the change count for this entry
+					if(nextValidChange[m] <= i) // if we didn't already increase the change count for this entry
 					{
 						//if(s_numChanges[i-k] != 0xFFFF)
 							buffers->s_numChanges[i-k]++; // increase the change count for this entry
-						nextValidChange[m] = i+sizeof(compareType); // and remember not to increase it again
+						nextValidChange[m] = i-k+sizeof(compareType); // and remember not to increase it again
 					}
 				}
 			}
@@ -298,9 +326,9 @@ void UpdateRegionsT()
 		++iter;
 		const MemoryRegion* nextRegion = (iter == s_activeMemoryRegions.end()) ? NULL : &*iter;
 
-		if(region.byteSwapped)
-			UpdateRegionT<stepType, compareType, 1>(region, nextRegion);
-		else
+		//if(region.byteSwapped)
+		//	UpdateRegionT<stepType, compareType, 1>(region, nextRegion);
+		//else
 			UpdateRegionT<stepType, compareType, 0>(region, nextRegion);
 	}
 
@@ -359,7 +387,8 @@ void ItemIndexToVirtualRegion(unsigned int itemIndex, MemoryRegion& virtualRegio
 	virtualRegion.hardwareAddress = region.hardwareAddress + bytesWithinRegion;
 	virtualRegion.softwareAddress = region.softwareAddress + bytesWithinRegion;
 	virtualRegion.virtualIndex = region.virtualIndex + bytesWithinRegion;
-	virtualRegion.byteSwapped = region.byteSwapped;
+	//virtualRegion.byteSwapped = region.byteSwapped;
+	virtualRegion.isDtcm = region.isDtcm;
 	virtualRegion.itemIndex = itemIndex;
 	return;
 }
@@ -432,7 +461,10 @@ unsigned int GetHardwareAddressFromItemIndex(unsigned int itemIndex)
 {
 	MemoryRegion virtualRegion;
 	ItemIndexToVirtualRegion<stepType,compareType>(itemIndex, virtualRegion);
-	return virtualRegion.hardwareAddress;
+	unsigned int address = virtualRegion.hardwareAddress;
+	if(virtualRegion.isDtcm)
+		address = (address & 0x3FFF) | MMU.DTCMRegion;
+	return address;
 }
 
 // this one might be unreliable, haven't used it much
@@ -441,6 +473,9 @@ unsigned int HardwareAddressToItemIndex(unsigned int hardwareAddress)
 {
 	if(s_itemIndicesInvalid)
 		CalculateItemIndices(sizeof(stepType));
+
+	if((hardwareAddress & ~0x3FFF) == MMU.DTCMRegion)
+		hardwareAddress = (hardwareAddress & 0x3FFF) | s_dtcmRegion.hardwareAddress;
 
 	for(MemoryList::iterator iter = s_activeMemoryRegions.begin(); iter != s_activeMemoryRegions.end(); ++iter)
 	{
@@ -485,10 +520,10 @@ struct DummyType { typedef T t; };
 	: sizeTypeID == 'd' \
 		? (isSigned \
 			? (requireAligned \
-				? functionName<short, COMMAHACK(signed,long)>(__VA_ARGS__) \
+				? functionName<long, COMMAHACK(signed,long)>(__VA_ARGS__) \
 				: functionName<char, COMMAHACK(signed,long)>(__VA_ARGS__)) \
 			: (requireAligned \
-				? functionName<short, COMMAHACK(unsigned,long)>(__VA_ARGS__) \
+				? functionName<long, COMMAHACK(unsigned,long)>(__VA_ARGS__) \
 				: functionName<char, COMMAHACK(unsigned,long)>(__VA_ARGS__))) \
 	: functionName<char, COMMAHACK(signed,char)>(__VA_ARGS__))
 
@@ -502,7 +537,7 @@ struct DummyType { typedef T t; };
 			: functionName<char, COMMAHACK(sign,type)>(__VA_ARGS__)) \
 	: sizeTypeID == 'd' \
 		? (requireAligned \
-			? functionName<short, COMMAHACK(sign,type)>(__VA_ARGS__) \
+			? functionName<long, COMMAHACK(sign,type)>(__VA_ARGS__) \
 			: functionName<char, COMMAHACK(sign,type)>(__VA_ARGS__)) \
 	: functionName<char, COMMAHACK(sign,type)>(__VA_ARGS__))
 
@@ -743,7 +778,7 @@ bool Set_RS_Val()
 			break;
 		case 'a':
 			rs_val = ReadControlInt(IDC_EDIT_COMPAREADDRESS, true, success);
-			if(!success || rs_val < 0 || rs_val > 0x06040000)
+			if(!success || rs_val < 0 /*|| rs_val > 0x060400FF*/)
 				return false;
 			break;
 		case 'n': {
@@ -970,7 +1005,7 @@ void UpdatePossibilities(int rs_possible, int regions);
 
 void CompactAddrs()
 {
-	int size = (rs_type_size=='b' || !noMisalign) ? 1 : 2;
+	int size = (rs_type_size=='b' || !noMisalign) ? 1 : (rs_type_size=='w' ? 2 : 4);
 	int prevResultCount = ResultCount;
 
 	CalculateItemIndices(size);
@@ -984,7 +1019,20 @@ void CompactAddrs()
 
 void soft_reset_address_info ()
 {
+	s_prevValuesNeedUpdate = false;
 	ResetMemoryRegions();
+	if(!RamSearchHWnd)
+	{
+		s_activeMemoryRegions.clear();
+		ResultCount = 0;
+	}
+	else
+	{
+		// force s_prevValues to be valid
+		signal_new_frame();
+		s_prevValuesNeedUpdate = true;
+		signal_new_frame();
+	}
 	memset(buffers->s_numChanges, 0, sizeof(buffers->s_numChanges));
 	CompactAddrs();
 }
@@ -1030,8 +1078,8 @@ void RefreshRamListSelectedCountControlStatus(HWND hDlg)
 	{
 		if(selCount < 2 || prevSelCount < 2)
 		{
-			EnableWindow(GetDlgItem(hDlg, IDC_C_WATCH), (selCount == 1 && WatchCount < MAX_WATCH_COUNT) ? TRUE : FALSE);
-			EnableWindow(GetDlgItem(hDlg, IDC_C_ADDCHEAT), (selCount == 1) ? /*TRUE*/FALSE : FALSE);
+			EnableWindow(GetDlgItem(hDlg, IDC_C_WATCH), (selCount >= 1 && WatchCount < MAX_WATCH_COUNT) ? TRUE : FALSE);
+			EnableWindow(GetDlgItem(hDlg, IDC_C_ADDCHEAT), (selCount >= 1) ? TRUE : FALSE);
 			EnableWindow(GetDlgItem(hDlg, IDC_C_ELIMINATE), (selCount >= 1) ? TRUE : FALSE);
 		}
 		prevSelCount = selCount;
@@ -1053,8 +1101,8 @@ void signal_new_size ()
 {
 	HWND lv = GetDlgItem(RamSearchHWnd,IDC_RAMLIST);
 
-	int oldSize = (rs_last_type_size=='b' || !rs_last_no_misalign) ? 1 : 2;
-	int newSize = (rs_type_size=='b' || !noMisalign) ? 1 : 2;
+	int oldSize = (rs_last_type_size=='b' || !rs_last_no_misalign) ? 1 : (rs_last_type_size=='w' ? 2 : 4);
+	int newSize = (rs_type_size=='b' || !noMisalign) ? 1 : (rs_type_size=='w' ? 2 : 4);
 	bool numberOfItemsChanged = (oldSize != newSize);
 
 	unsigned int itemsPerPage = ListView_GetCountPerPage(lv);
@@ -1070,7 +1118,7 @@ void signal_new_size ()
 		// unfortunately this can take a while if the user has a huge range of items selected
 //		Clear_Sound_Buffer();
 		int selCount = ListView_GetSelectedCount(lv);
-		int size = (rs_last_type_size=='b' || !rs_last_no_misalign) ? 1 : 2;
+		int size = (rs_last_type_size=='b' || !rs_last_no_misalign) ? 1 : (rs_last_type_size=='w' ? 2 : 4);
 		int watchIndex = -1;
 		for(int i = 0; i < selCount; ++i)
 		{
@@ -1078,7 +1126,7 @@ void signal_new_size ()
 			int addr = CALL_WITH_T_SIZE_TYPES(GetHardwareAddressFromItemIndex, rs_last_type_size,rs_t=='s',rs_last_no_misalign, watchIndex);
 			if(!selHardwareAddrs.empty() && addr == selHardwareAddrs.back().End())
 				selHardwareAddrs.back().size += size;
-			else
+			else if (!(noMisalign && oldSize < newSize && addr % newSize != 0))
 				selHardwareAddrs.push_back(AddrRange(addr,size));
 		}
 	}
@@ -1108,15 +1156,11 @@ void signal_new_size ()
 			if(selRangeTop == -1)
 				continue;
 
-			// select the entire range at once without deselecting the other ranges
-			// looks hacky but it works, and the only documentation I found on how to do this was blatantly false and equally hacky anyway
-			POINT pos;
-			ListView_EnsureVisible(lv, selRangeTop, 0);
-			ListView_GetItemPosition(lv, selRangeTop, &pos);
-			SendMessage(lv, WM_LBUTTONDOWN, MK_LBUTTON|MK_CONTROL, MAKELONG(pos.x,pos.y));
-			ListView_EnsureVisible(lv, selRangeBottom, 0);
-			ListView_GetItemPosition(lv, selRangeBottom, &pos);
-			SendMessage(lv, WM_LBUTTONDOWN, MK_LBUTTON|MK_CONTROL|MK_SHIFT, MAKELONG(pos.x,pos.y));
+			// select the entire range
+			for (unsigned int j = selRangeTop; j <= selRangeBottom; j++)
+			{
+				ListView_SetItemState(lv, j, LVIS_SELECTED|LVIS_FOCUSED, LVIS_SELECTED|LVIS_FOCUSED);
+			}
 		}
 
 		// restore previous scroll position
@@ -1135,6 +1179,8 @@ void signal_new_size ()
 	{
 		ListView_Update(lv, -1);
 	}
+	InvalidateRect(lv, NULL, TRUE);
+	//SetFocus(lv);
 }
 
 
@@ -1176,10 +1222,16 @@ LRESULT CustomDraw (LPARAM lParam)
 //extern "C" int disableRamSearchUpdate;
 void Update_RAM_Search() //keeps RAM values up to date in the search and watch windows
 {
+	if(RamWatchHWnd)
+	{
+		Update_RAM_Watch();
+	}
+
 	if (!RamSearchHWnd) return;
 //	if(disableRamSearchUpdate)
 //		return;
 
+	int prevValuesNeededUpdate;
 	if (AutoSearch && !ResultCount)
 	{
 		if(!AutoSearchAutoRetry)
@@ -1195,28 +1247,36 @@ void Update_RAM_Search() //keeps RAM values up to date in the search and watch w
 				AutoSearchAutoRetry = true;
 		}
 		reset_address_info();
+		prevValuesNeededUpdate = s_prevValuesNeedUpdate;
 	}
-
-	int prevValuesNeededUpdate = s_prevValuesNeedUpdate;
-	if (RamSearchHWnd)
+	else
 	{
-		// update active RAM values
-		signal_new_frame();
-	}
+		prevValuesNeededUpdate = s_prevValuesNeedUpdate;
+		if (RamSearchHWnd)
+		{
+			// update active RAM values
+			signal_new_frame();
+		}
 
-	if (AutoSearch && ResultCount)
-	{
-		//Clear_Sound_Buffer();
-		if(!rs_val_valid)
-			rs_val_valid = Set_RS_Val();
-		if(rs_val_valid)
-			prune(rs_c,rs_o,rs_t=='s',rs_val,rs_param);
+		if (AutoSearch && ResultCount)
+		{
+			//Clear_Sound_Buffer();
+			if(!rs_val_valid)
+				rs_val_valid = Set_RS_Val();
+			if(rs_val_valid)
+				prune(rs_c,rs_o,rs_t=='s',rs_val,rs_param);
+		}
 	}
 
 	if(RamSearchHWnd)
 	{
+		static u32 lastDtcmRegion = 0;
+		bool dtcmChanged = (lastDtcmRegion != MMU.DTCMRegion);
+		if(dtcmChanged)
+			lastDtcmRegion = MMU.DTCMRegion;
+
 		HWND lv = GetDlgItem(RamSearchHWnd,IDC_RAMLIST);
-		if(prevValuesNeededUpdate != s_prevValuesNeedUpdate)
+		if(prevValuesNeededUpdate != s_prevValuesNeedUpdate || dtcmChanged)
 		{
 			// previous values got updated, refresh everything visible
 			ListView_Update(lv, -1);
@@ -1253,11 +1313,6 @@ void Update_RAM_Search() //keeps RAM values up to date in the search and watch w
 				}
 			}
 		}
-	}
-
-	if(RamWatchHWnd)
-	{
-		Update_RAM_Watch();
 	}
 }
 
@@ -1438,6 +1493,17 @@ LRESULT CALLBACK RamSearchProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 			ListView_SetCallbackMask(GetDlgItem(hDlg,IDC_RAMLIST), LVIS_FOCUSED|LVIS_SELECTED);
 
+			// HACK: somehow the listbox disappears the second time the window opens
+			// unless we do this. obviously some specific part of this is all that matters
+			// but I haven't felt like tracking it down yet.
+			{
+				char typeSize = rs_type_size;
+				rs_type_size = ((typeSize == 'w') ? 'b' : 'w');
+				signal_new_size();
+				rs_type_size = typeSize;
+				signal_new_size();
+			}
+
 			return true;
 		}	break;
 
@@ -1449,7 +1515,8 @@ LRESULT CALLBACK RamSearchProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 				case LVN_ITEMCHANGED: // selection changed event
 				{
 					NM_LISTVIEW* pNMListView = (NM_LISTVIEW*)lP;
-					if(pNMListView->uNewState & LVIS_FOCUSED)
+					if(pNMListView->uNewState & LVIS_FOCUSED ||
+						(pNMListView->uNewState ^ pNMListView->uOldState) & LVIS_SELECTED)
 					{
 						// disable buttons that we don't have the right number of selected items for
 						RefreshRamListSelectedCountControlStatus(hDlg);
@@ -1515,7 +1582,7 @@ LRESULT CALLBACK RamSearchProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 
 				case NM_CUSTOMDRAW:
 				{
-					SetWindowLong(hDlg, DWL_MSGRESULT, CustomDraw(lParam));
+					SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CustomDraw(lParam));
 					return TRUE;
 				}	break;
 
@@ -1652,14 +1719,17 @@ LRESULT CALLBACK RamSearchProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 				}	{rv = true; break;}
 				case IDC_C_ADDCHEAT:
 				{
-//					watchIndex = ListView_GetSelectionMark(GetDlgItem(hDlg,IDC_RAMLIST));
-//					Liste_GG[CheatCount].restore = Liste_GG[CheatCount].data = rsresults[watchIndex].cur;
-//					Liste_GG[CheatCount].addr = rsresults[watchIndex].Address;
-//					Liste_GG[CheatCount].size = rs_type_size;
-//					Liste_GG[CheatCount].Type = rs_t;
-//					Liste_GG[CheatCount].oper = '=';
-//					Liste_GG[CheatCount].mode = 0;
-//					DialogBoxParam(ghInstance, MAKEINTRESOURCE(IDD_EDITCHEAT), hDlg, (DLGPROC) EditCheatProc,(LPARAM) 0);
+					HWND ramListControl = GetDlgItem(hDlg,IDC_RAMLIST);
+					int cheatItemIndex = ListView_GetNextItem(ramListControl, -1, LVNI_SELECTED);
+					while (cheatItemIndex >= 0)
+					{
+						u32 address = CALL_WITH_T_SIZE_TYPES(GetHardwareAddressFromItemIndex, rs_type_size,rs_t=='s',noMisalign, cheatItemIndex);
+						u8 size = (rs_type_size=='b') ? 1 : (rs_type_size=='w' ? 2 : 4);
+						u32 value = CALL_WITH_T_SIZE_TYPES(GetCurValueFromItemIndex, rs_type_size,rs_t=='s',noMisalign, cheatItemIndex);
+						CheatsAddDialog(hDlg, address, value, size);
+						cheatItemIndex = ListView_GetNextItem(ramListControl, cheatItemIndex, LVNI_SELECTED);
+					}
+					{rv = true; break;}
 				}
 				case IDC_C_RESET:
 				{
@@ -1744,8 +1814,12 @@ invalid_field:
 				}
 				case IDC_C_WATCH:
 				{
-					int watchItemIndex = ListView_GetSelectionMark(GetDlgItem(hDlg,IDC_RAMLIST));
-					if(watchItemIndex >= 0)
+					HWND ramListControl = GetDlgItem(hDlg,IDC_RAMLIST);
+					int selCount = ListView_GetSelectedCount(ramListControl);
+
+					bool inserted = false;
+					int watchItemIndex = ListView_GetNextItem(ramListControl, -1, LVNI_SELECTED);
+					while (watchItemIndex >= 0)
 					{
 						AddressWatcher tempWatch;
 						tempWatch.Address = CALL_WITH_T_SIZE_TYPES(GetHardwareAddressFromItemIndex, rs_type_size,rs_t=='s',noMisalign, watchItemIndex);
@@ -1754,14 +1828,17 @@ invalid_field:
 						tempWatch.WrongEndian = 0; //Replace when I get little endian working
 						tempWatch.comment = NULL;
 
-						bool inserted = InsertWatch(tempWatch, hDlg);
-						//ListView_Update(GetDlgItem(hDlg,IDC_RAMLIST), -1);
+						if (selCount == 1)
+							inserted |= InsertWatch(tempWatch, hDlg);
+						else
+							inserted |= InsertWatch(tempWatch, "");
 
-						// bring up the ram watch window if it's not already showing so the user knows where the watch went
-						if(inserted && !RamWatchHWnd)
-							SendMessage(MainWindow->getHWnd(), WM_COMMAND, ID_RAM_WATCH, 0);
-						SetForegroundWindow(RamSearchHWnd);
+						watchItemIndex = ListView_GetNextItem(ramListControl, watchItemIndex, LVNI_SELECTED);
 					}
+					// bring up the ram watch window if it's not already showing so the user knows where the watch went
+					if(inserted && !RamWatchHWnd)
+						SendMessage(MainWindow->getHWnd(), WM_COMMAND, ID_RAM_WATCH, 0);
+					SetForegroundWindow(RamSearchHWnd);
 					{rv = true; break;}
 				}
 
@@ -1771,7 +1848,7 @@ invalid_field:
 					RamSearchSaveUndoStateIfNotTooBig(hDlg);
 
 					HWND ramListControl = GetDlgItem(hDlg,IDC_RAMLIST);
-					int size = (rs_type_size=='b' || !noMisalign) ? 1 : 2;
+					int size = (rs_type_size=='b' || !noMisalign) ? 1 : (rs_type_size=='w' ? 2 : 4);
 					int selCount = ListView_GetSelectedCount(ramListControl);
 					int watchIndex = -1;
 

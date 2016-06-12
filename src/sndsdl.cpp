@@ -1,30 +1,35 @@
-/*  Copyright 2005-2006 Theo Berkau
+/*
+	Copyright (C) 2005-2006 Theo Berkau
+	Copyright (C) 2006-2010 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    Yabause is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with Yabause; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <stdlib.h>
 #include <string.h>
 
-#include <SDL/SDL.h>
+#include <SDL.h>
 #include "types.h"
 #include "SPU.h"
 #include "sndsdl.h"
 #include "debug.h"
+
+#ifdef _XBOX
+#include <xtl.h>
+#include <VectorIntrinsics.h>
+#include <process.h>
+#endif
 
 int SNDSDLInit(int buffersize);
 void SNDSDLDeInit();
@@ -54,6 +59,24 @@ static u32 soundbufsize;
 static SDL_AudioSpec audiofmt;
 
 //////////////////////////////////////////////////////////////////////////////
+#ifdef _XBOX
+static volatile bool doterminate;
+static volatile bool terminated;
+
+DWORD WINAPI SNDXBOXThread( LPVOID )
+{
+	for(;;) {
+		if(doterminate) break;
+		{
+			SPU_Emulate_user();
+		}
+		Sleep(10);
+	}
+	terminated = true;
+	return 0;
+}
+#endif
+
 
 static void MixAudio(void *userdata, Uint8 *stream, int len) {
    int i;
@@ -76,7 +99,7 @@ int SNDSDLInit(int buffersize)
    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
       return -1;
 
-   audiofmt.freq = 44100;
+   audiofmt.freq = DESMUME_SAMPLE_RATE;
    audiofmt.format = AUDIO_S16SYS;
    audiofmt.channels = 2;
    audiofmt.samples = (audiofmt.freq / 60) * 2;
@@ -108,6 +131,12 @@ int SNDSDLInit(int buffersize)
 
    SDL_PauseAudio(0);
 
+#ifdef _XBOX
+   	doterminate = false;
+	terminated = false;
+	CreateThread(0,0,SNDXBOXThread,0,0,0);
+#endif
+
    return 0;
 }
 
@@ -115,6 +144,12 @@ int SNDSDLInit(int buffersize)
 
 void SNDSDLDeInit()
 {
+#ifdef _XBOX
+	doterminate = true;
+	while(!terminated) {
+		Sleep(1);
+	}
+#endif
    SDL_CloseAudio();
 
    if (stereodata16)

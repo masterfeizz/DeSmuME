@@ -1,25 +1,20 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2008 CrazyMax
+	Copyright (C) 2008-2010 DeSmuME team
 
-    Copyright 2008 CrazyMax
-	Copyright 2008-2009 DeSmuME team
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    This file is part of DeSmuME
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 // TODO: interrupt handler
@@ -28,12 +23,13 @@
 #include "common.h"
 #include "debug.h"
 #include "armcpu.h"
-#include <time.h>
 #include <string.h>
+#include "saves.h"
 #ifdef WIN32
 #include "windows/main.h"
 #endif
 #include "movie.h"
+
 
 typedef struct
 {
@@ -58,70 +54,88 @@ typedef struct
 	u8	cmdStat;
 	u8	bitsCount;
 	u8	data[8];
+
+	u8 cmdBitsSize[8];
 } _RTC;
 
 _RTC	rtc;
 
-u8 cmdBitsSize[8] = {8, 8, 56, 24, 0, 24, 8, 8};
+SFORMAT SF_RTC[]={
+	{ "R000", 1, 1, &rtc.regStatus1},
+	{ "R010", 1, 1, &rtc.regStatus2},
+	{ "R020", 1, 1, &rtc.regAdjustment},
+	{ "R030", 1, 1, &rtc.regFree},
 
-#define toBCD(x) ((x / 10) << 4) | (x % 10);
+	{ "R040", 1, 1, &rtc._prevSCK},
+	{ "R050", 1, 1, &rtc._prevCS},
+	{ "R060", 1, 1, &rtc._prevSIO},
+	{ "R070", 1, 1, &rtc._SCK},
+	{ "R080", 1, 1, &rtc._CS},
+	{ "R090", 1, 1, &rtc._SIO},
+	{ "R100", 1, 1, &rtc._DD},
+	{ "R110", 2, 1, &rtc._REG},
 
-struct movietime {
+	{ "R120", 1, 1, &rtc.cmd},
+	{ "R130", 1, 1, &rtc.cmdStat},
+	{ "R140", 1, 1, &rtc.bitsCount},
+	{ "R150", 1, 8, &rtc.data[0]},
 
-	int sec;
-	int minute;
-	int hour;
-	int monthday;
-	int month;
-	int year;
-	int weekday;
+	{ "R160", 1, 8, &rtc.cmdBitsSize[0]},
+
+	{ 0 }
 };
 
-struct movietime movie;
+static const u8 kDefaultCmdBitsSize[8] = {8, 8, 56, 24, 0, 24, 8, 8};
+
+static inline u8 toBCD(u8 x)
+{
+	return ((x / 10) << 4) | (x % 10);
+}
 
 bool moviemode=false;
 
-void InitMovieTime(void)
+DateTime rtcGetTime(void)
 {
-	movie.year=9;
-	movie.month=1;
-	movie.monthday=1;
-	movie.weekday=4;
-}	
+	DateTime tm;
+	if(movieMode == MOVIEMODE_INACTIVE) {
+		return DateTime::get_Now();
+	}
+	else {
+		//now, you might think it is silly to go through all these conniptions
+		//when we could just assume that there are 60fps and base the seconds on frameCounter/60
+		//but, we were imagining that one day we might need more precision
 
-#ifdef WIN32
-static void MovieTime(void) {
+		const u32 arm9rate_unitsperframe = 560190<<1;
+		const u32 arm9rate_unitspersecond = (u32)(arm9rate_unitsperframe * 59.8261);
 
-	//now, you might think it is silly to go through all these conniptions
-	//when we could just assume that there are 60fps and base the seconds on frameCounter/60
-	//but, we were imagining that one day we might need more precision
+		u64 totalcycles = (u64)arm9rate_unitsperframe * currFrameCounter;
+		u64 totalseconds=totalcycles/arm9rate_unitspersecond;
 
-	const u32 arm9rate_unitsperframe = 560190<<1;
-	const u32 arm9rate_unitspersecond = (u32)(arm9rate_unitsperframe * 59.8261);
-	const u64 noon = (u64)arm9rate_unitspersecond * 60 * 60 * 12;
-	           
-	u64 frameCycles = (u64)arm9rate_unitsperframe * currFrameCounter;
-	u64 totalcycles = frameCycles + noon;
-	u32 totalseconds=totalcycles/arm9rate_unitspersecond;
-
-	movie.sec=totalseconds % 60;
-	movie.minute=totalseconds/60;
-	movie.hour=movie.minute/60;
-
-	//convert to sane numbers
-	movie.minute=movie.minute % 60;
-	movie.hour=movie.hour % 24;
+		DateTime timer = currMovieData.rtcStart;
+		return timer.AddSeconds(totalseconds);
+	}
 }
-#else
-static void MovieTime(void)
+
+void rtcGetTimeAsString(char *buffer)
 {
+	static const char *wday[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+	
+	const DateTime rtcTime = rtcGetTime();
+	snprintf(buffer, 25, "%04d-%3s-%02d %s %02d:%02d:%02d",
+			 rtcTime.get_Year(),
+			 DateTime::GetNameOfMonth(rtcTime.get_Month()),
+			 rtcTime.get_Day(),
+			 wday[rtcTime.get_DayOfWeek()%7],
+			 rtcTime.get_Hour(),
+			 rtcTime.get_Minute(),
+			 rtcTime.get_Second());
 }
-#endif
 
 static void rtcRecv()
 {
 	//INFO("RTC Read command 0x%02X\n", (rtc.cmd >> 1));
-	memset(rtc.data, 0, sizeof(rtc.data));
+
+	memset(&rtc.data[0], 0, sizeof(rtc.data));
 	switch (rtc.cmd >> 1)
 	{
 		case 0:				// status register 1
@@ -137,63 +151,38 @@ static void rtcRecv()
 		case 2:				// date & time
 			{
 				//INFO("RTC: read date & time\n");
-				time_t	tm;
-				time(&tm);
-				struct tm *tm_local= localtime(&tm);
-				tm_local->tm_year %= 100;
-				tm_local->tm_mon++;
+				DateTime tm = rtcGetTime();
+				rtc.data[0] = toBCD(tm.get_Year() % 100);
+				rtc.data[1] = toBCD(tm.get_Month());
+				rtc.data[2] = toBCD(tm.get_Day());
 
-				if(movieMode != MOVIEMODE_INACTIVE) {
+				//zero 24-apr-2010 - this is nonsense.
+				//but it is so wrong, someone mustve thought they knew what they were doing, so i am leaving it...
+				//rtc.data[3] = (tm.tm_wday + 6) & 7;
+				//if (rtc.data[3] == 7) rtc.data[3] = 6;
 
-					MovieTime();
-					
-					rtc.data[0]=toBCD(movie.year);
-					rtc.data[1]=toBCD(movie.month);
-					rtc.data[2]=toBCD(movie.monthday);
-					rtc.data[3]=(movie.weekday + 6) & 7;
-					if (!(rtc.regStatus1 & 0x02)) movie.hour %= 12;
-					rtc.data[4] = ((movie.hour < 12) ? 0x00 : 0x40) | toBCD(movie.hour);		
-					rtc.data[5]=toBCD(movie.minute);
-					rtc.data[6]=toBCD(movie.sec);
-					break;
-				}
-				else {
+				//do this instead (gbatek seems to say monday=0 but i don't think that is right)
+				//0=sunday is necessary to make animal crossing behave
+				//maybe it means "custom assignment" can be specified by the game
+				rtc.data[3] = tm.get_DayOfWeek();
 
-					rtc.data[0] = toBCD(tm_local->tm_year);
-					rtc.data[1] = toBCD(tm_local->tm_mon);
-					rtc.data[2] = toBCD(tm_local->tm_mday);
-					rtc.data[3] =  (tm_local->tm_wday + 6) & 7;
-					if (!(rtc.regStatus1 & 0x02)) tm_local->tm_hour %= 12;
-					rtc.data[4] = ((tm_local->tm_hour < 12) ? 0x00 : 0x40) | toBCD(tm_local->tm_hour);
-					rtc.data[5] =  toBCD(tm_local->tm_min);
-					rtc.data[6] =  toBCD(tm_local->tm_sec);
-					break;
-				}
+				int hour = tm.get_Hour(); 
+				if (!(rtc.regStatus1 & 0x02)) hour %= 12;
+				rtc.data[4] = ((hour < 12) ? 0x00 : 0x40) | toBCD(hour);
+				rtc.data[5] =  toBCD(tm.get_Minute());
+				rtc.data[6] =  toBCD(tm.get_Second());
+				break;
 			}
 		case 3:				// time
 			{
 				//INFO("RTC: read time\n");
-				time_t	tm;
-				time(&tm);
-				struct tm *tm_local= localtime(&tm);
-
-				if(movieMode != MOVIEMODE_INACTIVE) {
-
-					MovieTime();
-
-					if (!(rtc.regStatus1 & 0x02)) movie.hour %= 12;
-					rtc.data[0] = ((movie.hour < 12) ? 0x00 : 0x40) | toBCD(movie.hour);
-					rtc.data[1] =  toBCD(movie.minute);
-					rtc.data[2] =  toBCD(movie.sec);
-				}
-				else {
-
-					if (!(rtc.regStatus1 & 0x02)) tm_local->tm_hour %= 12;
-					rtc.data[0] = ((tm_local->tm_hour < 12) ? 0x00 : 0x40) | toBCD(tm_local->tm_hour);
-					rtc.data[1] =  toBCD(tm_local->tm_min);
-					rtc.data[2] =  toBCD(tm_local->tm_sec);
-					break;
-				}
+				DateTime tm = rtcGetTime();
+				int hour = tm.get_Hour(); 
+				if (!(rtc.regStatus1 & 0x02)) hour %= 12;
+				rtc.data[0] = ((hour < 12) ? 0x00 : 0x40) | toBCD(hour);
+				rtc.data[1] =  toBCD(tm.get_Minute());
+				rtc.data[2] =  toBCD(tm.get_Second());
+				break;
 			}
 		case 4:				// freq/alarm 1
 			/*if (cmdBitsSize[0x04] == 8)
@@ -218,7 +207,7 @@ static void rtcRecv()
 
 static void rtcSend()
 {
-	//INFO("RTC write 0x%02X\n", (rtc.cmd >> 1));
+	//INFO("RTC write command 0x%02X\n", (rtc.cmd >> 1));
 	switch (rtc.cmd >> 1)
 	{
 		case 0:				// status register 1
@@ -259,7 +248,9 @@ static void rtcSend()
 
 void rtcInit() 
 {
-	memset(&rtc, 0, sizeof(_RTC));
+	memset(&rtc, 0, sizeof(rtc));
+	memcpy(&rtc.cmdBitsSize[0],kDefaultCmdBitsSize,8);
+
 	rtc.regStatus1 |= 0x02;
 }
 
@@ -322,9 +313,9 @@ void rtcWrite(u16 val)
 					if ((rtc.cmd >> 1) == 0x04)
 					{
 						if ((rtc.regStatus2 & 0x0F) == 0x04)
-							cmdBitsSize[rtc.cmd >> 1] = 24;
+							rtc.cmdBitsSize[rtc.cmd >> 1] = 24;
 						else
-							cmdBitsSize[rtc.cmd >> 1] = 8;
+							rtc.cmdBitsSize[rtc.cmd >> 1] = 8;
 					}
 					if (rtc.cmd & 0x01)
 					{
@@ -345,7 +336,7 @@ void rtcWrite(u16 val)
 			{
 				if(rtc._SIO) rtc.data[rtc.bitsCount >> 3] |= (1 << (rtc.bitsCount & 0x07));
 				rtc.bitsCount++;
-				if (rtc.bitsCount == cmdBitsSize[rtc.cmd >> 1])
+				if (rtc.bitsCount == rtc.cmdBitsSize[rtc.cmd >> 1])
 				{
 					rtcSend();
 					rtc.cmdStat = 0;
@@ -357,13 +348,13 @@ void rtcWrite(u16 val)
 			if( (rtc._prevSCK) && (!rtc._SCK) )
 			{
 				rtc._REG = val;
-				if(rtc.data[rtc.bitsCount >> 3] >> (rtc.bitsCount & 0x07) & 0x01) 
+				if((rtc.data[(rtc.bitsCount >> 3)] >> (rtc.bitsCount & 0x07)) & 0x01) 
 					rtc._REG |= 0x01;
 				else
 					rtc._REG &= ~0x01;
 
 				rtc.bitsCount++;
-				if (rtc.bitsCount == cmdBitsSize[rtc.cmd >> 1])
+				if (rtc.bitsCount == rtc.cmdBitsSize[rtc.cmd >> 1] || (!(val & 0x04)))
 					rtc.cmdStat = 0;
 			}
 		break;

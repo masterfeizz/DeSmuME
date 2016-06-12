@@ -1,5 +1,5 @@
 //taken from ndstool
-//http://devkitpro.cvs.sourceforge.net/viewvc/devkitpro/tools/nds/ndstool/include/crc.h?revision=1.3
+//http://devkitpro.svn.sourceforge.net/viewvc/devkitpro/trunk/tools/nds/ndstool/include/crc.h?revision=2447
 
 /* crc.h - this file is part of DeSmuME
  *
@@ -30,6 +30,8 @@
 #define __CRC_H
 
 //#include "little.h"		// FixCrc is not yet big endian compatible
+#include <stdio.h>
+#include <string.h>
 
 /*
  * Data

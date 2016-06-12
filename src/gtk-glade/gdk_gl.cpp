@@ -1,5 +1,6 @@
 /* gdk_gl.cpp - this file is part of DeSmuME
  *
+ * Copyright (C) 2007-2015 DeSmuME Team
  * Copyright (C) 2007 Damien Nozay (damdoum)
  * Author: damdoum at users.sourceforge.net
  *
@@ -26,6 +27,8 @@
 #include <GL/gl.h>
 #include <GL/glu.h>
 
+#include "../GPU.h"
+
 #define _DUP8(a) a,a,a,a, a,a,a,a
 #define _DUP4(a) a,a,a,a
 #define _DUP2(a) a,a
@@ -48,7 +51,7 @@ static int gtk_glade_use_software_colour_convert;
 #undef _DUP2
 
 /* FIXME: Purpose of this code?  */
-static BOOL _fun_gl_Begin (int screen) { return FALSE; }
+/*static BOOL _fun_gl_Begin (int screen) { return FALSE; }
 static void _fun_gl_End (int screen) { }
 
 fun_gl_Begin Open_GL_beg = _fun_gl_Begin;
@@ -57,7 +60,7 @@ fun_gl_End   Open_GL_end = _fun_gl_End;
 void register_gl_fun(fun_gl_Begin beg,fun_gl_End end) {
 	Open_GL_beg = beg;
 	Open_GL_end = end;
-}
+}*/
 
 /************************************************/
 /* BEGIN & END                                  */
@@ -234,14 +237,16 @@ static void my_gl_Texture2D() {
 
 static void
 my_gl_ScreenTex( int software_convert) {
+  u16 *gpuFramebuffer = GPU->GetDisplayInfo().masterNativeBuffer;
+
   if ( software_convert) {
     u8 converted[256 * 384 * 3];
     int i;
 
     for ( i = 0; i < (256 * 384); i++) {
-      converted[(i * 3) + 0] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 0) & 0x1f) << 3;
-      converted[(i * 3) + 1] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 5) & 0x1f) << 3;
-      converted[(i * 3) + 2] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 10) & 0x1f) << 3;
+      converted[(i * 3) + 0] = ((gpuFramebuffer[i] >> 0) & 0x1f) << 3;
+      converted[(i * 3) + 1] = ((gpuFramebuffer[i] >> 5) & 0x1f) << 3;
+      converted[(i * 3) + 2] = ((gpuFramebuffer[i] >> 10) & 0x1f) << 3;
     }
 
     glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 256, 384,
@@ -253,7 +258,7 @@ my_gl_ScreenTex( int software_convert) {
     glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 256, 384,
                      GL_RGBA,
                      GL_UNSIGNED_SHORT_1_5_5_5_REV,
-                     &GPU_screen);
+                     gpuFramebuffer);
   }
 }
 
@@ -274,9 +279,7 @@ static void my_gl_ScreenTexApply(int screen) {
 
 gboolean screen (GtkWidget * widget, int viewportscreen) {
 	int screen;
-	GPU * gpu;
-	float bright_color = 0.0f; // blend with black
-	float bright_alpha = 0.0f; // don't blend
+	GPUEngineBase * gpu;
 	
 	// we take care to draw the right thing the right place
 	// we need to rearrange widgets not to use this trick
@@ -288,29 +291,16 @@ gboolean screen (GtkWidget * widget, int viewportscreen) {
 	glLoadIdentity();
 
 	// clear screen
-	glClearColor(0.0f,0.0f,0.0f,0.0f);
-	glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+	glClearColor(0.0f,0.0f,0.0f,1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
 
 	glEnable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_DITHER);
+	glDisable(GL_STENCIL_TEST);
 
 	if (desmume_running()) {
-
-		// master bright
-		gpu = ((screen)?SubScreen:MainScreen).gpu;
-		
-		switch (gpu->MasterBrightMode)
-		{
-			case 1: // Bright up : blend with white
-				bright_color = 1.0f;
-				// no break;
-			case 2: // Bright down : blend with black
-				bright_alpha = 1.0f; // blending max
-
-				bright_alpha = gpu->MasterBrightFactor / 16.0;
-				break;
-			// Disabled 0, Reserved 3
-			default: break;
-		}
 		// rotate
 		glRotatef(ScreenRotate, 0.0, 0.0, 1.0);
 		// create the texture for both display
@@ -318,12 +308,8 @@ gboolean screen (GtkWidget * widget, int viewportscreen) {
 		if (viewportscreen==0) {
                   my_gl_ScreenTex( gtk_glade_use_software_colour_convert);
 		}
-	} else {
-		// pause
-		// fake master bright up 50%
-		bright_color = 0.0f;
-		bright_alpha = 0.5f;
 	}
+	
 	// make sure current color is ok
 	glColor4ub(255,255,255,255);
 	// apply part of the texture
@@ -333,7 +319,6 @@ gboolean screen (GtkWidget * widget, int viewportscreen) {
 	// master bright (bis)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-	glColor4f(bright_color,bright_color,bright_color,bright_alpha);
 	glBegin(GL_QUADS);
 		glVertex2d(-1.0, 1.0);
 		glVertex2d( 1.0, 1.0);

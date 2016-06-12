@@ -23,18 +23,20 @@
 
 #include "../MMU.h"
 #include "../NDSSystem.h"
-#include "../cflash.h"
 #include "../debug.h"
 #include "../render3D.h"
 #include "../rasterize.h"
 #include "../saves.h"
 #include "../mic.h"
+#include "../SPU.h"
 
 #include "input.h"
 
+GFX3D *gfx3d;
+
 extern u32 __ctru_linear_heap_size;
 
-volatile BOOL execute = FALSE;
+volatile bool execute = FALSE;
 
 #define NUM_FRAMES_TO_TIME 15
 
@@ -115,11 +117,13 @@ int main(int argc, char **argv)
  	gfxSwapBuffersGpu();
 	gspWaitForVBlank();
 
+	gfx3d = new GFX3D;
+
 	/* the firmware settings */
 	struct NDS_fw_config_data fw_config;
 
 	/* default the firmware settings, they may get changed later */
-	NDS_FillDefaultFirmwareConfigData(&fw_config); 
+	NDS_FillDefaultFirmwareConfigData(&fw_config);
 
   	NDS_Init();
 
@@ -130,14 +134,8 @@ int main(int argc, char **argv)
 
 	backup_setManualBackupType(0);
 
-	if( access( "sdmc:/game.img", F_OK ) != -1 ) {
-		if (NDS_LoadROM( "sdmc:/game.nds", "sdmc:/game.img") < 0) {
-			printf("Error loading game.nds\n");
-		}
-		} else {
-		if (NDS_LoadROM( "sdmc:/game.nds", "sdmc:/game.img") < 0) {
-			printf("Error loading game.nds\n");
-		}
+	if (NDS_LoadROM( "sdmc:/game.nds", NULL) < 0) {
+		printf("Error loading game.nds\n");
 	}
 	
 	execute = TRUE;
@@ -145,32 +143,28 @@ int main(int argc, char **argv)
 	u32 *tfb = (u32*)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
 	u32 *bfb = (u32*)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
 
-
 	while(aptMainLoop()) {
-
-		for(int fskip = 0; fskip < 2; fskip++){
-			NDS_SkipNextFrame();
-			desmume_cycle();
-		}
+		
+		NDS_SkipNextFrame();
+		NDS_exec<false>();
 
 		desmume_cycle();
 
-		u16 * src = (u16*)GPU_screen;
+		u16 * src = (u16 *)GPU->GetDisplayInfo().masterNativeBuffer;
 		int x,y;
 		
+
 		u32 kHeld = hidKeysHeld();
 		if((kHeld & KEY_A) && (kHeld & KEY_L) && (kHeld & KEY_R) && (kHeld & KEY_DOWN)){
 			break;
 		}
-		
+
 		for(x=0; x<256; x++){
     		for(y=0; y<192;y++){
         		tfb[(((x + 72) * 240) + (191 - y))] = ABGR1555toRGBA8(src[( y * 256 ) + x]);
         		bfb[(((x + 32)*240) + (239 - y))] = ABGR1555toRGBA8(src[( (y + 192) * 256 ) + x]);
     		}
 		}
-
-
 
     }
 	

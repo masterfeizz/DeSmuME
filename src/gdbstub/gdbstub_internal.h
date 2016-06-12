@@ -1,21 +1,43 @@
+/*
+	Copyright (C) 2008-2015 DeSmuME team
+
+	Originally written by Ben Jaques.
+
+	Permission is hereby granted, free of charge, to any person obtaining a copy
+	of this software and associated documentation files (the "Software"), to deal
+	in the Software without restriction, including without limitation the rights
+	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	copies of the Software, and to permit persons to whom the Software is
+	furnished to do so, subject to the following conditions:
+
+	The above copyright notice and this permission notice shall be included in
+	all copies or substantial portions of the Software.
+
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+	THE SOFTWARE.
+*/
+
 #ifndef _GDBSTUB_INTERNAL_H_
 #define _GDBSTUB_INTERNAL_H_ 1
-/* $Id: gdbstub_internal.h,v 1.1 2007-06-07 09:43:25 masscat Exp $
- */
-/*
- * THE SOFTWARE WITHIN THIS FILE IS NOT COPYRIGHTED
- *
- * Originally written by Ben Jaques.
- *
- * The software is offered for use in the public domain in the hope that
- * it will be useful, but WITHOUT ANY WARRANTY; without even the implied
- * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- */
 
-#ifdef WIN32
-#define SOCKET_TYPE SOCKET
+#if defined(_MSC_VER)
+	#include <stdint.h>
+
+	#include <winsock2.h>
+	#define SOCKET_TYPE SOCKET
 #else
-#define SOCKET_TYPE int
+	#include <stdint.h>
+	#include <unistd.h>
+	#include <sys/socket.h>
+	#include <netdb.h>
+	#include <netinet/in.h>
+	#include <netinet/tcp.h>
+	#define SOCKET_TYPE int
 #endif
 
 
@@ -29,6 +51,8 @@ enum stop_type {
   STOP_AWATCHPOINT
 };
 
+struct armcpu_ctrl_iface;
+struct armcpu_memory_iface;
 
 /**
  * The structure describing a breakpoint.
@@ -73,21 +97,23 @@ struct gdb_stub_state {
 
   /** the listener thread */
   void *thread;
+  
+  void *arm_cpu_object;
 
   /** the id of the cpu the is under control */
   //u32 cpu_id;
 
   /** the interface used to control the CPU */
-  struct armcpu_ctrl_iface *cpu_ctrl;
+  armcpu_ctrl_iface *cpu_ctrl;
 
-  /** the memory interface passed to the CPU */
-  struct armcpu_memory_iface cpu_memio;
+  /** the CPU's memory interface */
+  armcpu_memory_iface *cpu_memio;
 
   /** the direct interface to the memory system */
-  struct armcpu_memory_iface *direct_memio;
+  armcpu_memory_iface *direct_memio;
 
-  /** the CPU memory interface to the real memory system */
-  struct armcpu_memory_iface *real_cpu_memio;
+  /** GDB stub's memory interface passed to the CPU */
+  armcpu_memory_iface *gdb_memio;
 
   /** the list of active instruction breakpoints */
   struct breakpoint_gdb *instr_breakpoints;

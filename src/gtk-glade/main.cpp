@@ -1,5 +1,6 @@
 /* main.c - this file is part of DeSmuME
  *
+ * Copyright (C) 2007-2015 DeSmuME Team
  * Copyright (C) 2007 Damien Nozay (damdoum)
  * Copyright (C) 2007 Pascal Giard (evilynux)
  * Author: damdoum at users.sourceforge.net
@@ -27,9 +28,12 @@
 #include "keyval_names.h"
 #include "rasterize.h"
 #include "desmume.h"
+#include "firmware.h"
+#include "desmume_config.h"
 
 #ifdef GDB_STUB
-#include "../gdbstub.h"
+#include "../armcpu.h"
+#include "../gdbstub/gdbstub.h"
 #endif
 
 #ifdef GTKGLEXT_AVAILABLE
@@ -59,7 +63,8 @@ const u16 gtk_kb_cfg[NB_KEYS] =
     GDK_s,         // X
     GDK_a,         // Y
     GDK_p,         // DEBUG
-    GDK_o          // BOOST
+    GDK_o,         // BOOST
+    GDK_BackSpace, // Lid
   };
 
 SoundInterface_struct *SNDCoreList[] = {
@@ -334,72 +339,6 @@ gchar * get_ui_file (const char *filename)
 }
 
 
-/* ***** ***** CONFIG FILE ***** ***** */
-char * CONFIG_FILE;
-
-static int Read_ConfigFile()
-{
-	int i, tmp;
-	GKeyFile * keyfile = g_key_file_new();
-	GError * error = NULL;
-	
-	load_default_config(gtk_kb_cfg);
-	
-	g_key_file_load_from_file(keyfile, CONFIG_FILE, G_KEY_FILE_NONE, 0);
-
-	/* Load keypad keys */
-	for(i = 0; i < NB_KEYS; i++)
-	{
-		tmp = g_key_file_get_integer(keyfile, "KEYS", key_names[i], &error);
-		if (error != NULL) {
-                  g_error_free(error);
-                  error = NULL;
-		} else {
-                  keyboard_cfg[i] = tmp;
-		}
-	}
-		
-	/* Load joypad keys */
-	for(i = 0; i < NB_KEYS; i++)
-	{
-		tmp = g_key_file_get_integer(keyfile, "JOYKEYS", key_names[i], &error);
-		if (error != NULL) {
-                  g_error_free(error);
-                  error = NULL;
-		} else {
-                  joypad_cfg[i] = tmp;
-		}
-	}
-
-	g_key_file_free(keyfile);
-		
-	return 0;
-}
-
-static int Write_ConfigFile()
-{
-	int i;
-	GKeyFile * keyfile;
-	gchar *contents;
-	
-	keyfile = g_key_file_new();
-	
-	for(i = 0; i < NB_KEYS; i++)
-	{
-		g_key_file_set_integer(keyfile, "KEYS", key_names[i], keyboard_cfg[i]);
-		g_key_file_set_integer(keyfile, "JOYKEYS", key_names[i], joypad_cfg[i]);
-	}
-
-	contents = g_key_file_to_data(keyfile, 0, 0);
-	g_file_set_contents(CONFIG_FILE, contents, -1, 0);
-	g_free(contents);
-
-	g_key_file_free(keyfile);
-	
-	return 0;
-}
-
-
 /*
  * The thread handling functions needed by the GDB stub code.
  */
@@ -426,18 +365,10 @@ joinThread_gdb( void *thread_handle) {
 
 static int
 common_gtk_glade_main( struct configured_features *my_config) {
-	/*SDL_TimerID limiter_timer;*/
-#ifdef GDB_STUB
-        gdbstub_handle_t arm9_gdb_stub;
-        gdbstub_handle_t arm7_gdb_stub;
-#endif
-        struct armcpu_memory_iface *arm9_memio = &arm9_base_memory_iface;
-        struct armcpu_memory_iface *arm7_memio = &arm7_base_memory_iface;
-        struct armcpu_ctrl_iface *arm9_ctrl_iface;
-        struct armcpu_ctrl_iface *arm7_ctrl_iface;
         /* the firmware settings */
         struct NDS_fw_config_data fw_config;
 	gchar *uifile;
+	GKeyFile *keyfile;
 
         /* default the firmware settings, they may get changed later */
         NDS_FillDefaultFirmwareConfigData( &fw_config);
@@ -451,34 +382,9 @@ common_gtk_glade_main( struct configured_features *my_config) {
 #ifdef GTKGLEXT_AVAILABLE
 // check if you have GTHREAD when running configure script
 	//g_thread_init(NULL);
-	register_gl_fun(my_gl_Begin,my_gl_End);
+	//register_gl_fun(my_gl_Begin,my_gl_End);
 #endif
 	init_keyvals();
-
-#ifdef GDB_STUB
-        if ( my_config->arm9_gdb_port != 0) {
-          arm9_gdb_stub = createStub_gdb( my_config->arm9_gdb_port,
-                                          &arm9_memio,
-                                          &arm9_base_memory_iface);
-
-          if ( arm9_gdb_stub == NULL) {
-            g_print( _("Failed to create ARM9 gdbstub on port %d\n"),
-                     my_config->arm9_gdb_port);
-            return -1;
-          }
-        }
-        if ( my_config->arm7_gdb_port != 0) {
-          arm7_gdb_stub = createStub_gdb( my_config->arm7_gdb_port,
-                                          &arm7_memio,
-                                          &arm7_base_memory_iface);
-
-          if ( arm7_gdb_stub == NULL) {
-            g_print( _("Failed to create ARM7 gdbstub on port %d\n"),
-                     my_config->arm7_gdb_port);
-            return -1;
-          }
-        }
-#endif
 
 	if(SDL_Init( SDL_INIT_TIMER | SDL_INIT_VIDEO) == -1)
           {
@@ -487,9 +393,7 @@ common_gtk_glade_main( struct configured_features *my_config) {
             return 1;
           }
 
-	desmume_init( arm9_memio, &arm9_ctrl_iface,
-                      arm7_memio, &arm7_ctrl_iface);
-
+	desmume_init();
 
         /* Create the dummy firmware */
         NDS_CreateDummyFirmware( &fw_config);
@@ -500,19 +404,45 @@ common_gtk_glade_main( struct configured_features *my_config) {
          * where the cpus are set up.
          */
 #ifdef GDB_STUB
-        if ( my_config->arm9_gdb_port != 0) {
-          activateStub_gdb( arm9_gdb_stub, arm9_ctrl_iface);
+    gdbstub_mutex_init();
+
+    gdbstub_handle_t arm9_gdb_stub = NULL;
+    gdbstub_handle_t arm7_gdb_stub = NULL;
+    
+    if ( my_config->arm9_gdb_port > 0) {
+        arm9_gdb_stub = createStub_gdb( my_config->arm9_gdb_port,
+                                         &NDS_ARM9,
+                                         &arm9_direct_memory_iface);
+        
+        if ( arm9_gdb_stub == NULL) {
+            g_printerr("Failed to create ARM9 gdbstub on port %d\n",
+                       my_config->arm9_gdb_port);
+            exit( -1);
         }
-        if ( my_config->arm7_gdb_port != 0) {
-          activateStub_gdb( arm7_gdb_stub, arm7_ctrl_iface);
+        else {
+            activateStub_gdb( arm9_gdb_stub);
         }
+    }
+    if ( my_config->arm7_gdb_port > 0) {
+        arm7_gdb_stub = createStub_gdb( my_config->arm7_gdb_port,
+                                         &NDS_ARM7,
+                                         &arm7_base_memory_iface);
+        
+        if ( arm7_gdb_stub == NULL) {
+            g_printerr("Failed to create ARM7 gdbstub on port %d\n",
+                       my_config->arm7_gdb_port);
+            exit( -1);
+        }
+        else {
+            activateStub_gdb( arm7_gdb_stub);
+        }
+    }
 #endif
 
         /* Initialize joysticks */
         if(!init_joy()) return 1;
 
-	CONFIG_FILE = g_build_filename(g_get_home_dir(), ".desmume.ini", NULL);
-	Read_ConfigFile();
+	keyfile = desmume_config_read_file(gtk_kb_cfg);
 
 	/* load the interface */
 	uifile        = get_ui_file("DeSmuMe.glade");
@@ -584,11 +514,23 @@ common_gtk_glade_main( struct configured_features *my_config) {
 	gtk_main();
 	desmume_free();
 
+#ifdef GDB_STUB
+    destroyStub_gdb( arm9_gdb_stub);
+	arm9_gdb_stub = NULL;
+	
+    destroyStub_gdb( arm7_gdb_stub);
+	arm7_gdb_stub = NULL;
+
+    gdbstub_mutex_destroy();
+#endif
+
         /* Unload joystick */
         uninit_joy();
 
 	SDL_Quit();
-	Write_ConfigFile();
+	desmume_config_update_keys(keyfile);
+	desmume_config_update_joykeys(keyfile);
+	desmume_config_dispose(keyfile);
 	return EXIT_SUCCESS;
 }
 

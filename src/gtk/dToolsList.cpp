@@ -1,6 +1,7 @@
 /* dToolsList.cpp
  *
  * Copyright (C) 2006 Thoduv
+ * Copyright (C) 2006-2015 DeSmuME Team
  *
  * This file is part of DeSmuME
  *
@@ -20,6 +21,7 @@
 */
 
 #include "dTool.h"
+#include "../types.h"
 #include "tools/ioregsView.h"
 
 dTool_t *dTools_list[] =
@@ -27,5 +29,5 @@ dTool_t *dTools_list[] =
 	&dTool_ioregsView
 };
 
-int dTools_list_size = 1;
+int dTools_list_size = ARRAY_SIZE(dTools_list);
 

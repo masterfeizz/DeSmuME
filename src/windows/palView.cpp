@@ -1,29 +1,32 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2006-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "palView.h"
+
 #include <commctrl.h>
-#include "debug.h"
-#include "resource.h"
+
+#include "../types.h"
+#include "../debug.h"
 #include "../MMU.h"
+#include "../gfx3d.h"
+
+#include "resource.h"
+#include "main.h"
 
 typedef struct
 {
@@ -62,7 +65,15 @@ LRESULT PalView_OnPaint(const u16 * adr, u16 num, HWND hwnd, WPARAM wParam, LPAR
                   for(x = 0; x < 16; ++x)
                   {
                        c = adr[(y<<4)+x+0x100*num];
-                       brush = CreateSolidBrush(RGB((c&0x1F)<<3, (c&0x3E0)>>2, (c&0x7C00)>>7));
+											 int r = (c>>0)&0x1F;
+											 int g = (c>>5)&0x1F;
+											 int b = (c>>10)&0x1F;
+											 //zero 08-dec-2013
+											 //main.cpp converts the screen from 555 via RGB15TO24_REVERSE which uses material_5bit_to_8bit. thus we get results here mirroring the display as follows:
+											 r = material_5bit_to_8bit[r];
+											 g = material_5bit_to_8bit[g];
+											 b = material_5bit_to_8bit[b];
+                       brush = CreateSolidBrush(RGB(r,g,b));
                        FillRect(hdc, &rect, brush);
                        DeleteObject(brush);
                        rect.left += 11;
@@ -95,7 +106,7 @@ BOOL CALLBACK ViewPalProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                  {
 					PalView = new palview_struct;
 					memset(PalView, 0, sizeof(palview_struct));
-					PalView->adr = (u16 *)ARM9Mem.ARM9_VMEM;
+					PalView->adr = (u16 *)MMU.ARM9_VMEM;
 					PalView->autoup_secs = 1;
 					SendMessage(GetDlgItem(hwnd, IDC_AUTO_UPDATE_SPIN),
 									UDM_SETRANGE, 0, MAKELONG(99, 1));
@@ -135,12 +146,8 @@ BOOL CALLBACK ViewPalProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
 					KillTimer(hwnd, IDT_VIEW_DISASM7);
 					PalView->autoup = false;
 				}
-
-				if (PalView!=NULL) 
-				{
-					delete PalView;
-					PalView = NULL;
-				}
+				delete PalView;
+				PalView = NULL;
 				//INFO("Close Palette view dialog\n");
 				PostQuitMessage(0);
 				return 0;
@@ -216,25 +223,25 @@ BOOL CALLBACK ViewPalProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                                             switch(sel)
                                             {
                                                  case 0 :
-                                                      PalView->adr = (u16 *)ARM9Mem.ARM9_VMEM;
+                                                      PalView->adr = (u16 *)MMU.ARM9_VMEM;
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_HIDE);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), FALSE);
                                                       break;
                                                  case 1 :
-                                                      PalView->adr = ((u16 *)ARM9Mem.ARM9_VMEM) + 0x200;
+                                                      PalView->adr = ((u16 *)MMU.ARM9_VMEM) + 0x200;
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_HIDE);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), FALSE);
                                                       break;
                                                  case 2 :
-                                                      PalView->adr = (u16 *)ARM9Mem.ARM9_VMEM + 0x100;
+                                                      PalView->adr = (u16 *)MMU.ARM9_VMEM + 0x100;
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_HIDE);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), FALSE);
                                                       break;
                                                  case 3 :
-                                                      PalView->adr = ((u16 *)ARM9Mem.ARM9_VMEM) + 0x300;
+                                                      PalView->adr = ((u16 *)MMU.ARM9_VMEM) + 0x300;
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_HIDE);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), FALSE);
@@ -243,7 +250,7 @@ BOOL CALLBACK ViewPalProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                                                  case 5 :
                                                  case 6 :
                                                  case 7 :
-                                                      PalView->adr = ((u16 *)(ARM9Mem.ExtPal[0][sel-4]));
+                                                      PalView->adr = ((u16 *)(MMU.ExtPal[0][sel-4]));
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), TRUE);
@@ -252,21 +259,21 @@ BOOL CALLBACK ViewPalProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                                                  case 9 :
                                                  case 10 :
                                                  case 11 :
-                                                      PalView->adr = ((u16 *)(ARM9Mem.ExtPal[1][sel-8]));
+                                                      PalView->adr = ((u16 *)(MMU.ExtPal[1][sel-8]));
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), TRUE);
                                                       break;
                                                  case 12 :
                                                  case 13 :
-                                                      PalView->adr = ((u16 *)(ARM9Mem.ObjExtPal[0][sel-12]));
+                                                      PalView->adr = ((u16 *)(MMU.ObjExtPal[0][sel-12]));
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), TRUE);
                                                       break;
                                                  case 14 :
                                                  case 15 :
-                                                      PalView->adr = ((u16 *)(ARM9Mem.ObjExtPal[1][sel-14]));
+                                                      PalView->adr = ((u16 *)(MMU.ObjExtPal[1][sel-14]));
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), TRUE);
@@ -275,7 +282,7 @@ BOOL CALLBACK ViewPalProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                                                  case 17 :
                                                  case 18 :
                                                  case 19 :
-                                                      PalView->adr = ((u16 *)(ARM9Mem.texInfo.texPalSlot[sel-16]));
+                                                      PalView->adr = ((u16 *)(MMU.texInfo.texPalSlot[sel-16]));
                                                       PalView->palnum = 0;
                                                       ShowWindow(GetDlgItem(hwnd, IDC_SCROLLER), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_SCROLLER), TRUE);

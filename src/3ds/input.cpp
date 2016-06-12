@@ -23,14 +23,43 @@
 
 #include <3ds.h>
 #include "input.h"
+#include "NDSSystem.h"
 
  /* Update NDS keypad */
 void update_keypad(u16 keys)
 {
-  ((u16 *)ARM9Mem.ARM9_REG)[0x130>>1] = ~keys & 0x3FF;
-  ((u16 *)MMU.ARM7_REG)[0x130>>1] = ~keys & 0x3FF;
-  /* Update X and Y buttons */
-  MMU.ARM7_REG[0x136] = ( ~( keys >> 10) & 0x3 ) | (MMU.ARM7_REG[0x136] & ~0x3);
+    // Set raw inputs
+  {
+    buttonstruct<bool> input = {};
+    input.G = (keys>>12)&1;
+    input.E = (keys>>8)&1;
+    input.W = (keys>>9)&1;
+    input.X = (keys>>10)&1;
+    input.Y = (keys>>11)&1;
+    input.A = (keys>>0)&1;
+    input.B = (keys>>1)&1;
+    input.S = (keys>>3)&1;
+    input.T = (keys>>2)&1;
+    input.U = (keys>>6)&1;
+    input.D = (keys>>7)&1;
+    input.L = (keys>>5)&1;
+    input.R = (keys>>4)&1;
+    input.F = (keys>>14)&1;
+    //RunAntipodalRestriction(input);
+    NDS_setPad(
+      input.R, input.L, input.D, input.U,
+      input.T, input.S, input.B, input.A,
+      input.Y, input.X, input.W, input.E,
+      input.G, input.F);
+  }
+  
+  // Set real input
+  NDS_beginProcessingInput();
+  {
+    UserButtons& input = NDS_getProcessingUserInput().buttons;
+    //ApplyAntipodalRestriction(input);
+  }
+  NDS_endProcessingInput();
 }
 
 /* Manage input events */

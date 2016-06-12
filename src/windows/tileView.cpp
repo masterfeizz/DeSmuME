@@ -1,45 +1,58 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2006-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "tileView.h"
+
+#include "../MMU.h"
+#include "../GPU.h"
+
 #include "commctrl.h"
 #include "resource.h"
 #include "debug.h"
-#include "../MMU.h"
-#include "../gpu.h"
+#include "main.h"
 
-typedef struct
+class tileview_struct
 {
+public:
+	tileview_struct()
+		: hwnd(NULL)
+	{}
+
 	u32	autoup_secs;
 	bool autoup;
 
 	HWND	hwnd;
 	u32 target;
 	u16 * pal;
-	s16 palnum;
+	void setPalnum(s16 num)
+	{
+		palnum = num;
+		if(hwnd == NULL) return;
+		char text[100];
+        sprintf(text, "Pal : %d", palnum);
+		SetDlgItemText(hwnd, IDC_PALNUM, text);
+	}
 	u16 tilenum;
 	u8 coul;
 	u32 x;
 	u32 y;
-} tileview_struct;
+	s16 palnum;
+};
 
 tileview_struct		*TileView = NULL;
 
@@ -80,10 +93,10 @@ LRESULT TileViewBox_Direct(HWND hwnd, tileview_struct * win, WPARAM wParam, LPAR
         FillRect(mem_dc, &rect, (HBRUSH)GetStockObject(WHITE_BRUSH));
         
 		u8* mem;
-		if(win->target >= ARM9MEM_LCDC)
-			mem = ARM9Mem.ARM9_LCD + win->target - ARM9MEM_LCDC;
+		if(win->target >= MMU_LCDC)
+			mem = MMU.ARM9_LCD + win->target - MMU_LCDC;
 		else
-			mem = MMU_RenderMapToLCD(win->target);
+			mem = (u8*)MMU_gpu_map(win->target);
 		if(mem)
 			SetDIBitsToDevice(mem_dc, 0, 0, 256, 256, 0, 0, 0, 256, mem, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
         
@@ -103,7 +116,6 @@ LRESULT TileViewBox_Pal256(HWND hwnd, tileview_struct * win, WPARAM wParam, LPAR
         HDC          hdc;
         PAINTSTRUCT  ps;
 //        SIZE fontsize;
-        TCHAR text[80];
         u16 bitmap[256*256];
         u16 * pal = ((u16 *)win->pal) + win->palnum*256;
         BITMAPV4HEADER bmi;
@@ -138,13 +150,13 @@ LRESULT TileViewBox_Pal256(HWND hwnd, tileview_struct * win, WPARAM wParam, LPAR
         
         if(win->pal)
         {
-             u32 i, num2, num, y, x;
+             u32 num2, num, y, x;
 
             u8* mem;
-			if(win->target >= ARM9MEM_LCDC)
-				mem = ARM9Mem.ARM9_LCD + win->target - ARM9MEM_LCDC;
+			if(win->target >= MMU_LCDC)
+				mem = MMU.ARM9_LCD + win->target - MMU_LCDC;
 			else
-				mem = MMU_RenderMapToLCD(win->target);
+				mem = (u8*)MMU_gpu_map(win->target);
 			 if(mem)
 			 {
 				 for(num2 = 0; num2<32; ++num2)
@@ -154,8 +166,6 @@ LRESULT TileViewBox_Pal256(HWND hwnd, tileview_struct * win, WPARAM wParam, LPAR
 					  bitmap[x + (y*256) + (num*8) +(num2*256*8)] = pal[mem[x + (y*8) + (num*64) +(num2*2048)]];        
 				 SetDIBitsToDevice(mem_dc, 0, 0, 256, 256, 0, 0, 0, 256, bitmap, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
 			 }
-             sprintf(text, "Pal : %d", win->palnum);
-             SetWindowText(GetDlgItem(hwnd, IDC_PALNUM), text);
         }
         else
              TextOut(mem_dc, 3, 3, "Il n'y a pas de palette", 23);
@@ -176,7 +186,6 @@ LRESULT TileViewBox_Pal16(HWND hwnd, tileview_struct * win, WPARAM wParam, LPARA
         HDC          hdc;
         PAINTSTRUCT  ps;
 //        SIZE fontsize;
-        TCHAR text[80];
         u16 bitmap[512*512];
         u16 * pal = ((u16 *)win->pal) + win->palnum*16;
         BITMAPV4HEADER bmi;
@@ -212,10 +221,10 @@ LRESULT TileViewBox_Pal16(HWND hwnd, tileview_struct * win, WPARAM wParam, LPARA
         if(win->pal)
         {
 			u8* mem;
-			if(win->target >= ARM9MEM_LCDC)
-				mem = ARM9Mem.ARM9_LCD + win->target - ARM9MEM_LCDC;
+			if(win->target >= MMU_LCDC)
+				mem = MMU.ARM9_LCD + win->target - MMU_LCDC;
 			else
-				mem = MMU_RenderMapToLCD(win->target);
+				mem = (u8*)MMU_gpu_map(win->target);
 
 			if(mem)
 				{
@@ -230,8 +239,6 @@ LRESULT TileViewBox_Pal16(HWND hwnd, tileview_struct * win, WPARAM wParam, LPARA
 				 }        
 				 SetDIBitsToDevice(mem_dc, 0, 0, 512, 256, 0, 0, 0, 256, bitmap, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
 			}
-             sprintf(text, "Pal : %d", win->palnum);
-             SetWindowText(GetDlgItem(hwnd, IDC_PALNUM), text);
         }
         else
              TextOut(mem_dc, 3, 3, "Il n'y a pas de palette", 23);
@@ -347,8 +354,8 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 						TileView = new tileview_struct;
 						memset(TileView, 0, sizeof(tileview_struct));
 						TileView->hwnd = hwnd;
-						TileView->target = ARM9MEM_ABG;
-						TileView->pal = ((u16 *)ARM9Mem.ARM9_VMEM);
+						TileView->target = MMU_ABG;
+						TileView->pal = ((u16 *)MMU.ARM9_VMEM);
 						TileView->autoup_secs = 1;
 						SendMessage(GetDlgItem(hwnd, IDC_AUTO_UPDATE_SPIN),
 								UDM_SETRANGE, 0, MAKELONG(99, 1));
@@ -419,11 +426,8 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 					KillTimer(hwnd, IDT_VIEW_TILE);
 					TileView->autoup = false;
 				}
-				if (TileView!=NULL) 
-				{
-					delete TileView;
-					TileView = NULL;
-				}
+				delete TileView;
+				TileView = NULL;
 				//INFO("Close Tile view dialog\n");
 				PostQuitMessage(0);
                  return 1;
@@ -437,11 +441,13 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                            ++(TileView->palnum);
                            if(TileView->palnum>15)
                                 TileView->palnum = 15;
+						   TileView->setPalnum(TileView->palnum);
                            break;
                       case SB_LINELEFT :
                            --(TileView->palnum);
                            if(TileView->palnum<0)
                                 TileView->palnum = 0;
+						   TileView->setPalnum(TileView->palnum);
                            break;
                  }
                  InvalidateRect(hwnd, NULL, FALSE);
@@ -514,21 +520,21 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                  case 5 :
                                                  case 6 :
                                                  case 7 :
-                                                      TileView->target = ARM9MEM_ABG + 0x10000*sel;
+                                                      TileView->target = MMU_ABG + 0x10000*sel;
                                                       break;
                                                  case 8 :
                                                  case 9 :
-                                                      TileView->target = ARM9MEM_BBG + 0x10000*(sel-8);
+                                                      TileView->target = MMU_BBG + 0x10000*(sel-8);
                                                       break;
                                                  case 10 :
                                                  case 11 :
                                                  case 12 :
                                                  case 13 :
-                                                      TileView->target = ARM9MEM_AOBJ + 0x10000*(sel-10);
+                                                      TileView->target = MMU_AOBJ + 0x10000*(sel-10);
                                                       break;
                                                  case 14 :
                                                  case 15 :
-                                                      TileView->target = ARM9MEM_BOBJ + 0x10000*(sel-14);
+                                                      TileView->target = MMU_BOBJ + 0x10000*(sel-14);
                                                       break;
                                                  case 16 :
                                                  case 17 :
@@ -540,7 +546,7 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                  case 23 :
                                                  case 24 :
                                                  case 25 :
-                                                      TileView->target = ARM9MEM_LCDC + 0x10000*(sel-16);
+                                                      TileView->target = MMU_LCDC + 0x10000*(sel-16);
                                                       break;
                                                  default :
                                                          return 1;
@@ -560,26 +566,30 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                             switch(sel)
                                             {
                                                  case 0 :
-                                                      TileView->pal = (u16 *)ARM9Mem.ARM9_VMEM;
+                                                      TileView->pal = (u16 *)MMU.ARM9_VMEM;
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), TRUE);
                                                       break;
                                                  case 1 :
-                                                      TileView->pal = ((u16 *)ARM9Mem.ARM9_VMEM) + 0x200;
+                                                      TileView->pal = ((u16 *)MMU.ARM9_VMEM) + 0x200;
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), TRUE);
                                                       break;
                                                  case 2 :
-                                                      TileView->pal = (u16 *)ARM9Mem.ARM9_VMEM + 0x100;
+                                                      TileView->pal = (u16 *)MMU.ARM9_VMEM + 0x100;
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), TRUE);
                                                       break;
                                                  case 3 :
-                                                      TileView->pal = ((u16 *)ARM9Mem.ARM9_VMEM) + 0x300;
+                                                      TileView->pal = ((u16 *)MMU.ARM9_VMEM) + 0x300;
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), TRUE);
                                                       break;
@@ -587,8 +597,9 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                  case 5 :
                                                  case 6 :
                                                  case 7 :
-                                                      TileView->pal = ((u16 *)(ARM9Mem.ExtPal[0][sel-4]));
+                                                      TileView->pal = ((u16 *)(MMU.ExtPal[0][sel-4]));
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_HIDE);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), FALSE);
                                                       if(TileView->coul == 2)
@@ -602,8 +613,9 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                  case 9 :
                                                  case 10 :
                                                  case 11 :
-                                                      TileView->pal = ((u16 *)(ARM9Mem.ExtPal[1][sel-8]));
+                                                      TileView->pal = ((u16 *)(MMU.ExtPal[1][sel-8]));
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_HIDE);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), FALSE);
                                                       if(TileView->coul == 2)
@@ -615,8 +627,9 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                       break;
                                                  case 12 :
                                                  case 13 :
-                                                      TileView->pal = ((u16 *)(ARM9Mem.ObjExtPal[0][sel-12]));
+                                                      TileView->pal = ((u16 *)(MMU.ObjExtPal[0][sel-12]));
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       if(TileView->coul == 2)
                                                       {
                                                            SendMessage(GetDlgItem(hwnd, IDC_256COUL), BM_SETCHECK, TRUE, 0);
@@ -626,8 +639,9 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                       break;
                                                  case 14 :
                                                  case 15 :
-                                                      TileView->pal = ((u16 *)(ARM9Mem.ObjExtPal[1][sel-14]));
+                                                      TileView->pal = ((u16 *)(MMU.ObjExtPal[1][sel-14]));
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       if(TileView->coul == 2)
                                                       {
                                                            SendMessage(GetDlgItem(hwnd, IDC_256COUL), BM_SETCHECK, TRUE, 0);
@@ -639,8 +653,9 @@ BOOL CALLBACK ViewTilesProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                                                  case 17 :
                                                  case 18 :
                                                  case 19 :
-                                                      TileView->pal = ((u16 *)(ARM9Mem.texInfo.texPalSlot[sel-16]));
+                                                      TileView->pal = ((u16 *)(MMU.texInfo.texPalSlot[sel-16]));
                                                       TileView->palnum = 0;
+													  TileView->setPalnum(TileView->palnum);
                                                       ShowWindow(GetDlgItem(hwnd, IDC_16COUL), SW_SHOW);
                                                       EnableWindow(GetDlgItem(hwnd, IDC_16COUL), TRUE);
                                                       break;

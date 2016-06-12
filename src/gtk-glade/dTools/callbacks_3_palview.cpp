@@ -33,26 +33,26 @@ void init_combo_palette(GtkComboBox *combo, u16 ** addresses) {
 	gtk_list_store_set (model, &iter, 0, str,-1); \
 	addresses[i]=((u16*)(addr) r); i++;
 
-	DO("Main screen BG  PAL", ARM9Mem.ARM9_VMEM,)
-	DO("Main screen SPR PAL", ARM9Mem.ARM9_VMEM,+0x100)
-	DO("Sub  screen BG  PAL", ARM9Mem.ARM9_VMEM,+0x200)
-	DO("Sub  screen SPR PAL", ARM9Mem.ARM9_VMEM,+0x300)
-	DO("Main screen ExtPAL 0", ARM9Mem.ExtPal[0][0],)
-	DO("Main screen ExtPAL 1", ARM9Mem.ExtPal[0][1],)
-	DO("Main screen ExtPAL 2", ARM9Mem.ExtPal[0][2],)
-	DO("Main screen ExtPAL 3", ARM9Mem.ExtPal[0][3],)
-	DO("Sub  screen ExtPAL 0", ARM9Mem.ExtPal[1][0],)
-	DO("Sub  screen ExtPAL 1", ARM9Mem.ExtPal[1][1],)
-	DO("Sub  screen ExtPAL 2", ARM9Mem.ExtPal[1][2],)
-	DO("Sub  screen ExtPAL 3", ARM9Mem.ExtPal[1][3],)
-	DO("Main screen SPR ExtPAL 0", ARM9Mem.ObjExtPal[0][0],)
-	DO("Main screen SPR ExtPAL 1", ARM9Mem.ObjExtPal[0][1],)
-	DO("Sub  screen SPR ExtPAL 0", ARM9Mem.ObjExtPal[1][0],)
-	DO("Sub  screen SPR ExtPAL 1", ARM9Mem.ObjExtPal[1][1],)
-	DO("Texture PAL 0", ARM9Mem.texInfo.texPalSlot[0],)
-	DO("Texture PAL 1", ARM9Mem.texInfo.texPalSlot[1],)
-	DO("Texture PAL 2", ARM9Mem.texInfo.texPalSlot[2],)
-	DO("Texture PAL 3", ARM9Mem.texInfo.texPalSlot[3],)
+	DO("Main screen BG  PAL", MMU.ARM9_VMEM,)
+	DO("Main screen SPR PAL", MMU.ARM9_VMEM,+0x100)
+	DO("Sub  screen BG  PAL", MMU.ARM9_VMEM,+0x200)
+	DO("Sub  screen SPR PAL", MMU.ARM9_VMEM,+0x300)
+	DO("Main screen ExtPAL 0", MMU.ExtPal[0][0],)
+	DO("Main screen ExtPAL 1", MMU.ExtPal[0][1],)
+	DO("Main screen ExtPAL 2", MMU.ExtPal[0][2],)
+	DO("Main screen ExtPAL 3", MMU.ExtPal[0][3],)
+	DO("Sub  screen ExtPAL 0", MMU.ExtPal[1][0],)
+	DO("Sub  screen ExtPAL 1", MMU.ExtPal[1][1],)
+	DO("Sub  screen ExtPAL 2", MMU.ExtPal[1][2],)
+	DO("Sub  screen ExtPAL 3", MMU.ExtPal[1][3],)
+	DO("Main screen SPR ExtPAL 0", MMU.ObjExtPal[0][0],)
+	DO("Main screen SPR ExtPAL 1", MMU.ObjExtPal[0][1],)
+	DO("Sub  screen SPR ExtPAL 0", MMU.ObjExtPal[1][0],)
+	DO("Sub  screen SPR ExtPAL 1", MMU.ObjExtPal[1][1],)
+	DO("Texture PAL 0", MMU.texInfo.texPalSlot[0],)
+	DO("Texture PAL 1", MMU.texInfo.texPalSlot[1],)
+	DO("Texture PAL 2", MMU.texInfo.texPalSlot[2],)
+	DO("Texture PAL 3", MMU.texInfo.texPalSlot[3],)
 #undef DO
 	gtk_combo_box_set_active(combo,0);
 }
@@ -67,15 +67,15 @@ static GtkSpinButton * wSpin;
 static u16 mem[0x100];
 
 
-static COLOR c;
-static COLOR32 c32;
+//static COLOR c;
+//static COLOR32 c32;
 static GdkGC * gdkGC;
 
 static inline void paint_col(int x, int y, u16 col) {
-	c.val = col;
-	COLOR_16_32(c,c32)
-	gdk_rgb_gc_set_foreground(gdkGC, c32.val);
-	gdk_draw_rectangle(wPaint->window, gdkGC, TRUE, x, y, 15, 15);
+        //c.val = col;
+        //COLOR_16_32(c,c32)
+        //gdk_rgb_gc_set_foreground(gdkGC, c32.val);
+        //gdk_draw_rectangle(wPaint->window, gdkGC, TRUE, x, y, 15, 15);
 }
 static inline void paint_cross(int x, int y) {
 	gdk_rgb_gc_set_foreground(gdkGC, 0x808080);

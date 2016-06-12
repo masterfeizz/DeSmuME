@@ -31,7 +31,7 @@ TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
 SOURCES		:=	src
 DATA		:=	data
-INCLUDES	:=	src
+INCLUDES	:=	src src/windows/agg/include
 APP_TITLE	:=  DeSmuME
 #ROMFS		:=	romfs
 
@@ -44,9 +44,9 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations -Wfatal-errors \
 			-fomit-frame-pointer -ffunction-sections \
 			-ffast-math $(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS
+CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DHAVE_LIBZ
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -77,41 +77,69 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 SOURCES_CXX +=  armcpu.cpp \
 		        arm_instructions.cpp \
-		        bios.cpp cp15.cpp \
-		        cflash.cpp  \
+		        bios.cpp \
+		        cp15.cpp \
 				common.cpp \
 				debug.cpp \
-				Disassembler.cpp  \
+				Disassembler.cpp \
+				driver.cpp \
+				emufile.cpp \
+				encrypt.cpp \
+				firmware.cpp \
+				fs-3ds.cpp \
 				FIFO.cpp \
-				GPU_osd.cpp \
 				GPU.cpp \
 			    mc.cpp \
 				readwrite.cpp \
 				wifi.cpp \
-			    MMU.cpp NDSSystem.cpp \
+				path.cpp \
+			    MMU.cpp \
+			    NDSSystem.cpp \
 				ROMReader.cpp \
 				render3D.cpp \
+				rasterize.cpp \
 				rtc.cpp \
 			    saves.cpp \
 			    SPU.cpp \
-				softrender.cpp \
 				matrix.cpp \
 				gfx3d.cpp \
 				texcache.cpp \
 			    thumb_instructions.cpp \
 				movie.cpp \
-				addons.cpp \
-				addons/compactFlash.cpp addons/gbagame.cpp addons/none.cpp addons/rumblepak.cpp \
 				mic.cpp \
 				cheatSystem.cpp \
-				rasterize.cpp \
-				fs-3ds.cpp \
+				slot1.cpp \
+				slot2.cpp \
+				version.cpp \
+				addons/slot2_auto.cpp addons/slot2_mpcf.cpp addons/slot2_paddle.cpp addons/slot2_gbagame.cpp addons/slot2_none.cpp addons/slot2_rumblepak.cpp addons/slot2_guitarGrip.cpp addons/slot2_expMemory.cpp addons/slot2_piano.cpp addons/slot2_passme.cpp addons/slot1_none.cpp addons/slot1_r4.cpp addons/slot1_retail_nand.cpp addons/slot1_retail_auto.cpp addons/slot1_retail_mcrom.cpp addons/slot1_retail_mcrom_debug.cpp addons/slot1comp_mc.cpp addons/slot1comp_rom.cpp addons/slot1comp_protocol.cpp \
+				utils/advanscene.cpp \
+				utils/datetime.cpp \
+				utils/xstring.cpp \
+				utils/vfat.cpp \
+				utils/fsnitro.cpp \
+				utils/dlditool.cpp \
+				utils/emufat.cpp \
 				utils/decrypt/decrypt.cpp \
 				utils/decrypt/header.cpp \
+				utils/tinyxml/tinyxml.cpp \
+				utils/tinyxml/tinystr.cpp \
+				utils/tinyxml/tinyxmlerror.cpp \
+				utils/tinyxml/tinyxmlparser.cpp \
+				utils/libfat/cache.cpp \
+				utils/libfat/directory.cpp \
+				utils/libfat/disc.cpp \
+				utils/libfat/fatdir.cpp \
+				utils/libfat/fatfile.cpp \
+				utils/libfat/filetime.cpp \
+				utils/libfat/file_allocation_table.cpp \
+				utils/libfat/libfat.cpp \
+				utils/libfat/libfat_public_api.cpp \
+				metaspu/metaspu.cpp \
+				3ds/3ds_task.cpp \
 				3ds/main.cpp \
 				3ds/input.cpp
 
-CFILES		:= 3ds/heap.c
+CFILES		:= 
 CPPFILES	:=
 SFILES		:=
 PICAFILES	:=
@@ -169,7 +197,7 @@ endif
 all: $(BUILD)
 
 $(BUILD):
-	@[ -d $@ ] || mkdir -p $@/utils/decrypt && mkdir -p $@/addons && mkdir -p $@/3ds
+	@[ -d $@ ] || mkdir -p $@/utils/decrypt && mkdir -p $@/addons && mkdir -p $@/3ds && mkdir -p $@/utils/tinyxml && mkdir -p $@/utils/libfat && mkdir -p $@/metaspu
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------

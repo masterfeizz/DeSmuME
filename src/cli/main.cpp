@@ -1,6 +1,6 @@
 /* main.c - this file is part of DeSmuME
  *
- * Copyright (C) 2006,2007 DeSmuME Team
+ * Copyright (C) 2006-2015 DeSmuME Team
  * Copyright (C) 2007 Pascal Giard (evilynux)
  *
  * This file is free software; you can redistribute it and/or modify
@@ -18,11 +18,11 @@
  * the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 02111-1307, USA.
  */
-#include <SDL/SDL.h>
-#include <SDL/SDL_thread.h>
+#include <SDL.h>
+#include <SDL_thread.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <glib.h>
 
 #ifndef VERSION
 #define VERSION "Unknown version"
@@ -44,21 +44,27 @@
 #define CLI_UI
 #endif
 
-#include "../MMU.h"
 #include "../NDSSystem.h"
-#include "../cflash.h"
-#include "../debug.h"
+#include "../driver.h"
+#include "../GPU.h"
+#include "../SPU.h"
 #include "../sndsdl.h"
 #include "../ctrlssdl.h"
 #include "../render3D.h"
 #include "../rasterize.h"
 #include "../saves.h"
-#include "../mic.h"
+#include "../GPU_osd.h"
+#include "../desmume_config.h"
+#include "../commandline.h"
+#include "../slot2.h"
+#include "../utils/xstring.h"
+
 #ifdef GDB_STUB
+#include "../armcpu.h"
 #include "../gdbstub.h"
 #endif
 
-volatile BOOL execute = FALSE;
+volatile bool execute = false;
 
 static float nds_screen_size_ratio = 1.0f;
 
@@ -68,8 +74,7 @@ static float nds_screen_size_ratio = 1.0f;
 #define NUM_FRAMES_TO_TIME 60
 #endif
 
-
-#define FPS_LIMITER_FRAME_PERIOD 8
+#define FPS_LIMITER_FPS 60
 
 static SDL_Surface * surface;
 
@@ -118,53 +123,32 @@ const u16 cli_kb_cfg[NB_KEYS] =
     SDLK_s,         // X
     SDLK_a,         // Y
     SDLK_p,         // DEBUG
-    SDLK_o          // BOOST
+    SDLK_o,         // BOOST
+    SDLK_BACKSPACE, // Lid
   };
 
-static BOOL enable_fake_mic;
+class configured_features : public CommandLine
+{
+public:
+  int auto_pause;
+  int frameskip;
 
-struct my_config {
-  int load_slot;
-  u16 arm9_gdb_port;
-  u16 arm7_gdb_port;
-
-  int disable_sound;
   int engine_3d;
-
   int savetype;
-
+  
 #ifdef INCLUDE_OPENGL_2D
   int opengl_2d;
   int soft_colour_convert;
 #endif
-  int auto_pause;
-  int disable_limiter;
-  int frameskip;
-  int fps_limiter_frame_period;
 
   int firmware_language;
-
-  const char *nds_file;
-  const char *cflash_disk_image_file;
 };
 
 static void
-init_config( struct my_config *config) {
-  config->load_slot = 0;
-
-  config->arm9_gdb_port = 0;
-  config->arm7_gdb_port = 0;
-
-  config->disable_sound = 0;
+init_config( class configured_features *config) {
 
   config->auto_pause = 0;
-  config->disable_limiter = 0;
   config->frameskip = 0;
-  config->fps_limiter_frame_period = FPS_LIMITER_FRAME_PERIOD;
-
-  config->nds_file = NULL;
-
-  config->cflash_disk_image_file = NULL;
 
   config->engine_3d = 1;
   config->savetype = 0;
@@ -180,207 +164,90 @@ init_config( struct my_config *config) {
 
 
 static int
-fill_config( struct my_config *config,
+fill_config( class configured_features *config,
              int argc, char ** argv) {
-  int good_args = 1;
-  int print_usage = 0;
-  int i;
-
-  for ( i = 1; i < argc && good_args; i++) {
-    if ( strcmp( argv[i], "--help") == 0) {
-      printf( "USAGE: %s [options] <nds-file>\n", argv[0]);
-      printf( "OPTIONS:\n");
-      printf( "   --load-slot=NUM     Loads savegame from slot NUM\n");
-      printf( "   --auto-pause        Pause emulation of focus is lost.\n");
-      printf( "   --disable-sound     Disables the sound emulation\n");
-      printf( "   --disable-limiter   Disables the 60 fps limiter\n");
-      printf( "   --frameskip=N       Set frameskip to N\n");
-      printf( "   --limiter-period=N  Set frame period of the fps limiter to N (default: %d)\n", FPS_LIMITER_FRAME_PERIOD);
-      printf( "   --3d-engine=ENGINE  Select 3d rendering engine, available ENGINES:\n");
-      printf( "                         0 = 3d disabled\n");
-      printf( "                         1 = internal desmume software rasterizer (default)\n");
+  GOptionEntry options[] = {
+    { "auto-pause", 0, 0, G_OPTION_ARG_NONE, &config->auto_pause, "Pause emulation if focus is lost", NULL},
+    { "frameskip", 0, 0, G_OPTION_ARG_INT, &config->frameskip, "Set frameskip", "FRAMESKIP"},
+    { "3d-engine", 0, 0, G_OPTION_ARG_INT, &config->engine_3d, "Select 3d rendering engine. Available engines:\n"
+        "\t\t\t\t\t\t  0 = 3d disabled\n"
+        "\t\t\t\t\t\t  1 = internal rasterizer (default)\n"
+        ,"ENGINE"},
+    { "save-type", 0, 0, G_OPTION_ARG_INT, &config->savetype, "Select savetype from the following:\n"
+    "\t\t\t\t\t\t  0 = Autodetect (default)\n"
+    "\t\t\t\t\t\t  1 = EEPROM 4kbit\n"
+    "\t\t\t\t\t\t  2 = EEPROM 64kbit\n"
+    "\t\t\t\t\t\t  3 = EEPROM 512kbit\n"
+    "\t\t\t\t\t\t  4 = FRAM 256kbit\n"
+    "\t\t\t\t\t\t  5 = FLASH 2mbit\n"
+    "\t\t\t\t\t\t  6 = FLASH 4mbit\n",
+    "SAVETYPE"},
 #ifdef INCLUDE_OPENGL_2D
-      printf( "   --opengl-2d         Enables using OpenGL for screen rendering\n");
-      printf( "   --soft-convert      Use software colour conversion during OpenGL\n");
-      printf( "                       screen rendering. May produce better or worse\n");
-      printf( "                       frame rates depending on hardware.\n");
+    { "opengl-2d", 0, 0, G_OPTION_ARG_NONE, &config->opengl_2d, "Enables using OpenGL for screen rendering", NULL},
+    { "soft-convert", 0, 0, G_OPTION_ARG_NONE, &config->soft_colour_convert, "Use software colour conversion during OpenGL screen rendering. May produce better or worse frame rates depending on hardware.",
+     NULL},
 #endif
-      printf( "\n");
-      printf( "   --save-type=TYPE    Select savetype from the following:\n");
-      for(int jj = 0; save_type_names[jj] != NULL; jj++){
-          printf("                         %d = %s\n",jj,save_type_names[jj]);
-      }
+    { "fwlang", 0, 0, G_OPTION_ARG_INT, &config->firmware_language, "Set the language in the firmware, LANG as follows:\n"
+    "\t\t\t\t\t\t  0 = Japanese\n"
+    "\t\t\t\t\t\t  1 = English\n"
+    "\t\t\t\t\t\t  2 = French\n"
+    "\t\t\t\t\t\t  3 = German\n"
+    "\t\t\t\t\t\t  4 = Italian\n"
+    "\t\t\t\t\t\t  5 = Spanish\n",
+    "LANG"},
+    { NULL }
+  };
 
-      printf( "\n");
-      printf( "   --fwlang=LANG       Set the language in the firmware, LANG as follows:\n");
-      printf( "                         0 = Japanese\n");
-      printf( "                         1 = English\n");
-      printf( "                         2 = French\n");
-      printf( "                         3 = German\n");
-      printf( "                         4 = Italian\n");
-      printf( "                         5 = Spanish\n");
-      printf( "\n");
+  config->loadCommonOptions();
+  g_option_context_add_main_entries (config->ctx, options, "options");
+  config->parse(argc,argv);
+
+  if(!config->validate())
+    goto error;
+
+  if (config->savetype < 0 || config->savetype > 6) {
+    g_printerr("Accepted savetypes are from 0 to 6.\n");
+    return false;
+  }
+
+  if (config->firmware_language < -1 || config->firmware_language > 5) {
+    g_printerr("Firmware language must be set to a value from 0 to 5.\n");
+    goto error;
+  }
+
+  if (config->engine_3d != 0 && config->engine_3d != 1) {
+    g_printerr("Currently available engines: 0, 1.\n");
+    goto error;
+  }
+
+  if (config->frameskip < 0) {
+    g_printerr("Frameskip must be >= 0.\n");
+    goto error;
+  }
+
+  if (config->nds_file == "") {
+    g_printerr("Need to specify file to load.\n");
+    goto error;
+  }
+
 #ifdef GDB_STUB
-      printf( "   --arm9gdb=PORT_NUM  Enable the ARM9 GDB stub on the given port\n");
-      printf( "   --arm7gdb=PORT_NUM  Enable the ARM7 GDB stub on the given port\n");
-#endif
-      //printf( "   --sticky                Enable sticky keys and stylus\n");
-      printf( "\n");
-      printf( "   --cflash=PATH_TO_DISK_IMAGE\n");
-      printf( "                       Enable disk image GBAMP compact flash emulation\n");
-      printf( "\n");
-      printf( "   --help              Display this message\n");
-      printf( "   --version           Display the version\n");
-      good_args = 0;
-    }
-    else if ( strcmp( argv[i], "--version") == 0) {
-      printf( "%s\n", VERSION);
-      good_args = 0;
-    }
-    else if ( strncmp( argv[i], "--load-slot=", 12) == 0) {
-      long slot = strtol( &argv[i][12], NULL, 10 );
-      if(slot >= 0 && slot <= 10)
-        config->load_slot = slot;
-      else
-        printf("Invalid slot number %ld\n", slot);
-    }
-    else if ( strcmp( argv[i], "--disable-sound") == 0) {
-      config->disable_sound = 1;
-    }
-#ifdef INCLUDE_OPENGL_2D
-    else if ( strcmp( argv[i], "--opengl-2d") == 0) {
-      config->opengl_2d = 1;
-    }
-    else if ( strcmp( argv[i], "--soft-convert") == 0) {
-      config->soft_colour_convert = 1;
-    }
-#endif
-    else if ( strcmp( argv[i], "--auto-pause") == 0) {
-      config->auto_pause = 1;
-    }
-    else if ( strcmp( argv[i], "--disable-limiter") == 0) {
-      config->disable_limiter = 1;
-    }
-    else if ( strncmp( argv[i], "--frameskip=", 12) == 0) {
-      char *end_char;
-      int frameskip = strtoul(&argv[i][12], &end_char, 10);
-
-      if ( frameskip >= 0 ) {
-        config->frameskip = frameskip;
-      }
-      else {
-        fprintf(stderr, "frameskip must be >=0\n");
-        good_args = 0;
-      }
-    }
-    else if ( strncmp( argv[i], "--limiter-period=", 17) == 0) {
-      char *end_char;
-      int period = strtoul(&argv[i][17], &end_char, 10);
-
-      if ( period >= 0 && period <= 30 ) {
-        config->fps_limiter_frame_period = period;
-      }
-      else {
-        fprintf(stderr, "fps lmiter period must be >=0 and <= 30!\n");
-        good_args = 0;
-      }
-    }
-    else if ( strncmp( argv[i], "--3d-engine=", 12) == 0) {
-      char *end_char;
-      int engine = strtoul( &argv[i][12], &end_char, 10);
-
-      if ( engine == 0 || engine == 1) {
-        config->engine_3d = engine;
-      }
-      else {
-        fprintf( stderr, "3d engine can be 0 or 1\n");
-        good_args = 0;
-      }
-    }
-    else if ( strncmp( argv[i], "--save-type=", 12) == 0) {
-      char *end_char;
-      int savetype = strtoul( &argv[i][12], &end_char, 10);
-      int last = sizeof(save_type_names)/sizeof(const char * )-2; // NULL terminator, 0-based 
-
-      if ( savetype >= 0 && savetype <= last) {
-        config->savetype = savetype;
-      }
-      else {
-        fprintf( stderr, "savetype can be 0-%d\n",last);
-        good_args = 0;
-      }
-    }
-    else if ( strncmp( argv[i], "--fwlang=", 9) == 0) {
-      char *end_char;
-      int lang = strtoul( &argv[i][9], &end_char, 10);
-
-      if ( lang >= 0 && lang <= 5) {
-        config->firmware_language = lang;
-      }
-      else {
-        fprintf( stderr, "Firmware language must be set to a value from 0 to 5.\n");
-        good_args = 0;
-      }
-    }
-#ifdef GDB_STUB
-    else if ( strncmp( argv[i], "--arm9gdb=", 10) == 0) {
-      char *end_char;
-      unsigned long port_num = strtoul( &argv[i][10], &end_char, 10);
-
-      if ( port_num > 0 && port_num < 65536) {
-        config->arm9_gdb_port = port_num;
-      }
-      else {
-        fprintf( stderr, "ARM9 GDB stub port must be in the range 1 to 65535\n");
-        good_args = 0;
-      }
-    }
-    else if ( strncmp( argv[i], "--arm7gdb=", 10) == 0) {
-      char *end_char;
-      unsigned long port_num = strtoul( &argv[i][10], &end_char, 10);
-
-      if ( port_num > 0 && port_num < 65536) {
-        config->arm7_gdb_port = port_num;
-      }
-      else {
-        fprintf( stderr, "ARM7 GDB stub port must be in the range 1 to 65535\n");
-        good_args = 0;
-      }
-    }
-#endif
-    else if ( strncmp( argv[i], "--cflash=", 9) == 0) {
-      if ( config->cflash_disk_image_file == NULL) {
-        config->cflash_disk_image_file = &argv[i][9];
-      }
-      else {
-        fprintf( stderr, "CFlash disk image file (\"%s\") already set\n",
-                 config->cflash_disk_image_file);
-        good_args = 0;
-      }
-    }
-    else {
-      if ( config->nds_file == NULL) {
-        config->nds_file = argv[i];
-      }
-      else {
-        fprintf( stderr, "NDS file (\"%s\") already set\n", config->nds_file);
-        good_args = 0;
-      }
-    }
+  if (config->arm9_gdb_port != 0 && (config->arm9_gdb_port < 1 || config->arm9_gdb_port > 65535)) {
+    g_printerr("ARM9 GDB stub port must be in the range 1 to 65535\n");
+    goto error;
   }
 
-  if ( good_args) {
-    if ( config->nds_file == NULL) {
-      print_usage = 1;
-      good_args = 0;
-    }
+  if (config->arm7_gdb_port != 0 && (config->arm7_gdb_port < 1 || config->arm7_gdb_port > 65535)) {
+    g_printerr("ARM7 GDB stub port must be in the range 1 to 65535\n");
+    goto error;
   }
+#endif
 
-  if ( print_usage) {
-    fprintf( stderr, "USAGE: %s <nds-file>\n  %s --help for more info\n", argv[0], argv[0]);
-  }
+  return 1;
 
-  return good_args;
+error:
+  config->errorHelp(argv[0]);
+
+  return 0;
 }
 
 /*
@@ -402,30 +269,6 @@ joinThread_gdb( void *thread_handle) {
   SDL_WaitThread( (SDL_Thread*)thread_handle, &ignore);
 }
 #endif
-
-
-
-/** 
- * A SDL timer callback function. Signals the supplied SDL semaphore
- * if its value is small.
- * 
- * @param interval The interval since the last call (in ms)
- * @param param The pointer to the semaphore.
- * 
- * @return The interval to the next call (required by SDL)
- */
-static Uint32
-fps_limiter_fn( Uint32 interval, void *param) {
-  SDL_sem *sdl_semaphore = (SDL_sem *)param;
-
-  /* signal the semaphore if it is getting low */
-  if ( SDL_SemValue( sdl_semaphore) < 4) {
-    SDL_SemPost( sdl_semaphore);
-  }
-
-  return interval;
-}
-
 
 #ifdef INCLUDE_OPENGL_2D
 /* initialization openGL function */
@@ -479,26 +322,24 @@ initGL( GLuint *screen_texture) {
 }
 
 static void
-resizeWindow( u16 width, u16 height) {
+resizeWindow( u16 width, u16 height, GLuint *screen_texture) {
+
   int comp_width = 3 * width;
   int comp_height = 2 * height;
-  int use_width = 1;
   GLenum errCode;
 
-  /* Height / width ration */
-  GLfloat ratio;
+  surface = SDL_SetVideoMode(width, height, 32, sdl_videoFlags);
+  initGL(screen_texture);
+
+#ifdef HAVE_LIBAGG
+  Hud.reset();
+#endif
 
   if ( comp_width > comp_height) {
-    use_width = 0;
+    width = 2*height/3;
   }
- 
-  /* Protect against a divide by zero */
-  if ( height == 0 )
-    height = 1;
-  if ( width == 0)
-    width = 1;
-
-  ratio = ( GLfloat )width / ( GLfloat )height;
+  height = 3*width/2;
+  nds_screen_size_ratio = 256.0 / (double)width;
 
   /* Setup our viewport. */
   glViewport( 0, 0, ( GLint )width, ( GLint )height );
@@ -510,39 +351,7 @@ resizeWindow( u16 width, u16 height) {
   glMatrixMode( GL_PROJECTION );
   glLoadIdentity( );
 
-  {
-    double left;
-    double right;
-    double bottom;
-    double top;
-    double other_dimen;
-
-    if ( use_width) {
-      left = 0.0;
-      right = 256.0;
-
-      nds_screen_size_ratio = 256.0 / (double)width;
-
-      other_dimen = (double)width * 3.0 / 2.0;
-
-      top = 0.0;
-      bottom = 384.0 * ((double)height / other_dimen);
-    }
-    else {
-      top = 0.0;
-      bottom = 384.0;
-
-      nds_screen_size_ratio = 384.0 / (double)height;
-
-      other_dimen = (double)height * 2.0 / 3.0;
-
-      left = 0.0;
-      right = 256.0 * ((double)width / other_dimen);
-    }
-
-    /* get the area (0,0) to (256,384) into the middle of the viewport */
-    gluOrtho2D( left, right, bottom, top);
-  }
+  gluOrtho2D( 0.0, 256.0, 384.0, 0.0);
 
   /* Make sure we're chaning the model view and not the projection */
   glMatrixMode( GL_MODELVIEW );
@@ -556,15 +365,13 @@ resizeWindow( u16 width, u16 height) {
     errString = gluErrorString(errCode);
     fprintf( stderr, "GL resize failed: %s\n", errString);
   }
-
-  surface = SDL_SetVideoMode( width, height, 32,
-                              sdl_videoFlags );
 }
 
 
 static void
 opengl_Draw( GLuint *texture, int software_convert) {
   GLenum errCode;
+  u16 *gpuFramebuffer = (u16 *)GPU->GetDisplayInfo().masterNativeBuffer;
 
   /* Clear The Screen And The Depth Buffer */
   glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
@@ -579,9 +386,9 @@ opengl_Draw( GLuint *texture, int software_convert) {
     u8 converted[256 * 384 * 3];
 
     for ( i = 0; i < (256 * 384); i++) {
-      converted[(i * 3) + 0] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 0) & 0x1f) << 3;
-      converted[(i * 3) + 1] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 5) & 0x1f) << 3;
-      converted[(i * 3) + 2] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 10) & 0x1f) << 3;
+      converted[(i * 3) + 0] = ((gpuFramebuffer[i] >> 0) & 0x1f) << 3;
+      converted[(i * 3) + 1] = ((gpuFramebuffer[i] >> 5) & 0x1f) << 3;
+      converted[(i * 3) + 2] = ((gpuFramebuffer[i] >> 10) & 0x1f) << 3;
     }
 
     glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 256, 384,
@@ -593,7 +400,7 @@ opengl_Draw( GLuint *texture, int software_convert) {
     glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, 256, 384,
                      GL_RGBA,
                      GL_UNSIGNED_SHORT_1_5_5_5_REV,
-                     &GPU_screen);
+                     gpuFramebuffer);
   }
 
   if ((errCode = glGetError()) != GL_NO_ERROR) {
@@ -624,26 +431,37 @@ opengl_Draw( GLuint *texture, int software_convert) {
 }
 #endif
 
+/* this is a stub for resizeWindow_stub in the case of no gl headers or no opengl 2d */
+#ifdef INCLUDE_OPENGL_2D
+static void
+resizeWindow_stub (u16 width, u16 height, GLuint *screen_texture) {
+}
+#else
+static void
+resizeWindow_stub (u16 width, u16 height, void *screen_texture) {
+}
+#endif
+
 static void
 Draw( void) {
   SDL_Surface *rawImage;
-	
-  rawImage = SDL_CreateRGBSurfaceFrom((void*)&GPU_screen, 256, 384, 16, 512, 0x001F, 0x03E0, 0x7C00, 0);
+
+  rawImage = SDL_CreateRGBSurfaceFrom(GPU->GetDisplayInfo().masterNativeBuffer, 256, 384, 16, 512, 0x001F, 0x03E0, 0x7C00, 0);
   if(rawImage == NULL) return;
-	
+
   SDL_BlitSurface(rawImage, 0, surface, 0);
 
   SDL_UpdateRect(surface, 0, 0, 0, 0);
-  
+
   SDL_FreeSurface(rawImage);
   return;
 }
 
-static void desmume_cycle(int *sdl_quit, int *boost, struct my_config * my_config)
+static void desmume_cycle(struct ctrls_event_config * cfg)
 {
-    static unsigned short keypad;
-    static int focused = 1;
     SDL_Event event;
+
+    cfg->nds_screen_size_ratio = nds_screen_size_ratio;
 
     /* Look for queued events and update keypad status */
     /* IMPORTANT: Reenable joystick events iif needed. */
@@ -651,57 +469,11 @@ static void desmume_cycle(int *sdl_quit, int *boost, struct my_config * my_confi
       SDL_JoystickEventState(SDL_ENABLE);
 
     /* There's an event waiting to be processed? */
-    while ( !*sdl_quit &&
-        (SDL_PollEvent(&event) || (!focused && SDL_WaitEvent(&event))))
+    while ( !cfg->sdl_quit &&
+        (SDL_PollEvent(&event) || (!cfg->focused && SDL_WaitEvent(&event))))
       {
-        process_ctrls_event( event, &keypad, nds_screen_size_ratio);
-
-        switch (event.type)
-        {
-#ifdef INCLUDE_OPENGL_2D
-          case SDL_VIDEORESIZE:
-            resizeWindow( event.resize.w, event.resize.h);
-            break;
-#endif
-          case SDL_ACTIVEEVENT:
-            if (my_config->auto_pause && (event.active.state & SDL_APPINPUTFOCUS ))
-            {
-              if (event.active.gain)
-              {
-                focused = 1;
-                SPU_Pause(0);
-              }
-              else
-              {
-                focused = 0;
-                SPU_Pause(1);
-              }
-            }
-            break;
-
-          case SDL_KEYUP:
-            switch (event.key.keysym.sym)
-            {
-              case SDLK_ESCAPE:
-                *sdl_quit = 1;
-                break;
-              case SDLK_m:
-                enable_fake_mic = !enable_fake_mic;
-                Mic_DoNoise(enable_fake_mic);
-                break;
-              case SDLK_o:
-                *boost = !(*boost);
-                break;
-              default:
-                break;
-            }
-            break;
- 
-          case SDL_QUIT:
-            *sdl_quit = 1;
-            break;
-        }
-      }
+        process_ctrls_event( event, cfg);
+    }
 
     /* Update mouse position and click */
     if(mouse.down) NDS_setTouchPos(mouse.x, mouse.y);
@@ -711,34 +483,31 @@ static void desmume_cycle(int *sdl_quit, int *boost, struct my_config * my_confi
         mouse.click = FALSE;
       }
 
-    update_keypad(keypad);     /* Update keypad */
+    update_keypad(cfg->keypad);     /* Update keypad */
     NDS_exec<false>();
     SPU_Emulate_user();
 }
 
-int main(int argc, char ** argv) {
-  struct my_config my_config;
-#ifdef GDB_STUB
-  gdbstub_handle_t arm9_gdb_stub;
-  gdbstub_handle_t arm7_gdb_stub;
-  struct armcpu_memory_iface *arm9_memio = &arm9_base_memory_iface;
-  struct armcpu_memory_iface *arm7_memio = &arm7_base_memory_iface;
-  struct armcpu_ctrl_iface *arm9_ctrl_iface;
-  struct armcpu_ctrl_iface *arm7_ctrl_iface;
+#ifdef HAVE_LIBAGG
+T_AGG_RGB555 agg_targetScreen_cli((u8 *)GPU->GetDisplayInfo().masterNativeBuffer, 256, 384, 512);
 #endif
 
+int main(int argc, char ** argv) {
+  class configured_features my_config;
+  struct ctrls_event_config ctrls_cfg;
+
   int limiter_frame_counter = 0;
-  SDL_sem *fps_limiter_semaphore = NULL;
-  SDL_TimerID limiter_timer = NULL;
-  int sdl_quit = 0;
-  int boost = 0;
+  int limiter_tick0 = 0;
   int error;
+
+  GKeyFile *keyfile;
+
+  int now;
 
 #ifdef DISPLAY_FPS
   u32 fps_timing = 0;
   u32 fps_frame_counter = 0;
   u32 fps_previous_time = 0;
-  u32 fps_temp_time;
 #endif
 
 #ifdef INCLUDE_OPENGL_2D
@@ -749,6 +518,8 @@ int main(int argc, char ** argv) {
 
   /* the firmware settings */
   struct NDS_fw_config_data fw_config;
+
+  NDS_Init();
 
   /* default the firmware settings, they may get changed later */
   NDS_FillDefaultFirmwareConfigData( &fw_config);
@@ -764,36 +535,105 @@ int main(int argc, char ** argv) {
     fw_config.language = my_config.firmware_language;
   }
 
-#ifdef GDB_STUB
-  if ( my_config.arm9_gdb_port != 0) {
-    arm9_gdb_stub = createStub_gdb( my_config.arm9_gdb_port,
-                                    &arm9_memio,
-                                    &arm9_direct_memory_iface);
+    my_config.process_addonCommands();
 
+    int slot2_device_type = NDS_SLOT2_AUTO;
+
+    if (my_config.is_cflash_configured)
+        slot2_device_type = NDS_SLOT2_CFLASH;
+
+    if(my_config.gbaslot_rom != "") {
+
+        //set the GBA rom and sav paths
+        GBACartridge_RomPath = my_config.gbaslot_rom.c_str();
+        if(toupper(strright(GBACartridge_RomPath,4)) == ".GBA")
+          GBACartridge_SRAMPath = strright(GBACartridge_RomPath,4) + ".sav";
+        else
+          //what to do? lets just do the same thing for now
+          GBACartridge_SRAMPath = strright(GBACartridge_RomPath,4) + ".sav";
+
+        // Check if the file exists and can be opened
+        FILE * test = fopen(GBACartridge_RomPath.c_str(), "rb");
+        if (test) {
+            slot2_device_type = NDS_SLOT2_GBACART;
+            fclose(test);
+        }
+    }
+
+	switch (slot2_device_type)
+	{
+		case NDS_SLOT2_NONE:
+			break;
+		case NDS_SLOT2_AUTO:
+			break;
+		case NDS_SLOT2_CFLASH:
+			break;
+		case NDS_SLOT2_RUMBLEPAK:
+			break;
+		case NDS_SLOT2_GBACART:
+			break;
+		case NDS_SLOT2_GUITARGRIP:
+			break;
+		case NDS_SLOT2_EXPMEMORY:
+			break;
+		case NDS_SLOT2_EASYPIANO:
+			break;
+		case NDS_SLOT2_PADDLE:
+			break;
+		case NDS_SLOT2_PASSME:
+			break;
+		default:
+			slot2_device_type = NDS_SLOT2_NONE;
+			break;
+	}
+    
+    slot2_Init();
+    slot2_Change((NDS_SLOT2_TYPE)slot2_device_type);
+
+  if ( !g_thread_supported()) {
+    g_thread_init( NULL);
+  }
+
+  driver = new BaseDriver();
+  
+#ifdef GDB_STUB
+  gdbstub_mutex_init();
+
+  /*
+   * Activate the GDB stubs
+   * This has to come after NDS_Init() where the CPUs are set up.
+   */
+  gdbstub_handle_t arm9_gdb_stub = NULL;
+  gdbstub_handle_t arm7_gdb_stub = NULL;
+  
+  if ( my_config.arm9_gdb_port > 0) {
+    arm9_gdb_stub = createStub_gdb( my_config.arm9_gdb_port,
+                                   &NDS_ARM9,
+                                   &arm9_direct_memory_iface);
+    
     if ( arm9_gdb_stub == NULL) {
       fprintf( stderr, "Failed to create ARM9 gdbstub on port %d\n",
-               my_config.arm9_gdb_port);
+              my_config.arm9_gdb_port);
       exit( 1);
     }
+    else {
+      activateStub_gdb( arm9_gdb_stub);
+    }
   }
-  if ( my_config.arm7_gdb_port != 0) {
+  if ( my_config.arm7_gdb_port > 0) {
     arm7_gdb_stub = createStub_gdb( my_config.arm7_gdb_port,
-                                    &arm7_memio,
-                                    &arm7_base_memory_iface);
-
+                                   &NDS_ARM7,
+                                   &arm7_base_memory_iface);
+    
     if ( arm7_gdb_stub == NULL) {
       fprintf( stderr, "Failed to create ARM7 gdbstub on port %d\n",
-               my_config.arm7_gdb_port);
+              my_config.arm7_gdb_port);
       exit( 1);
     }
+    else {
+      activateStub_gdb( arm7_gdb_stub);
+    }
   }
-#endif
-
-#ifdef GDB_STUB
-  NDS_Init( arm9_memio, &arm9_ctrl_iface,
-            arm7_memio, &arm7_ctrl_iface);
-#else
-        NDS_Init();
 #endif
 
   /* Create the dummy firmware */
@@ -807,30 +647,13 @@ int main(int argc, char ** argv) {
 
   backup_setManualBackupType(my_config.savetype);
 
-#ifdef EXPERIMENTAL_GBASLOT
-  error = NDS_LoadROM( my_config.nds_file );
-#else
-  error = NDS_LoadROM( my_config.nds_file, my_config.cflash_disk_image_file );
-#endif
+  error = NDS_LoadROM( my_config.nds_file.c_str() );
   if (error < 0) {
-    fprintf(stderr, "error while loading %s\n", my_config.nds_file);
+    fprintf(stderr, "error while loading %s\n", my_config.nds_file.c_str());
     exit(-1);
   }
 
-  /*
-   * Activate the GDB stubs
-   * This has to come after the NDS_Init where the cpus are set up.
-   */
-#ifdef GDB_STUB
-  if ( my_config.arm9_gdb_port != 0) {
-    activateStub_gdb( arm9_gdb_stub, arm9_ctrl_iface);
-  }
-  if ( my_config.arm7_gdb_port != 0) {
-    activateStub_gdb( arm7_gdb_stub, arm7_ctrl_iface);
-  }
-#endif
-
-  execute = TRUE;
+  execute = true;
 
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) == -1)
     {
@@ -855,7 +678,6 @@ int main(int argc, char ** argv) {
   if ( my_config.opengl_2d) {
     /* the flags to pass to SDL_SetVideoMode */
     sdl_videoFlags  = SDL_OPENGL;          /* Enable OpenGL in SDL */
-    sdl_videoFlags |= SDL_GL_DOUBLEBUFFER; /* Enable double buffering */
     sdl_videoFlags |= SDL_HWPALETTE;       /* Store the palette in hardware */
     sdl_videoFlags |= SDL_RESIZABLE;       /* Enable window resizing */
 
@@ -878,7 +700,7 @@ int main(int argc, char ** argv) {
       fprintf( stderr, "Video mode set failed: %s\n", SDL_GetError( ) );
       exit( -1);
     }
-    
+
 
     /* initialize OpenGL */
     if ( !initGL( screen_texture)) {
@@ -902,77 +724,91 @@ int main(int argc, char ** argv) {
 
   /* set the initial window size */
   if ( my_config.opengl_2d) {
-    resizeWindow( 256, 192*2);
+    resizeWindow( 256, 192*2, screen_texture);
   }
 #endif
 
   /* Initialize joysticks */
   if(!init_joy()) return 1;
-  /* Load our own keyboard configuration */
-  set_kb_keys(cli_kb_cfg);
+  /* Load keyboard and joystick configuration */
+  keyfile = desmume_config_read_file(cli_kb_cfg);
+  desmume_config_dispose(keyfile);
+  /* Since gtk has a different mapping the keys stop to work with the saved configuration :| */
+  load_default_config(cli_kb_cfg);
 
-  if ( !my_config.disable_limiter) {
-    /* create the semaphore used for fps limiting */
-    fps_limiter_semaphore = SDL_CreateSemaphore( 1);
-
-    /* start a SDL timer for every FPS_LIMITER_FRAME_PERIOD frames to keep us at 60 fps */
-    if ( fps_limiter_semaphore != NULL) {
-      limiter_timer = SDL_AddTimer( 16 * my_config.fps_limiter_frame_period,
-                                  fps_limiter_fn, fps_limiter_semaphore);
-    }
-
-    if ( limiter_timer == NULL) {
-      fprintf( stderr, "Error trying to start FPS limiter timer: %s\n",
-               SDL_GetError());
-      if ( fps_limiter_semaphore != NULL) {
-        SDL_DestroySemaphore( fps_limiter_semaphore);
-        fps_limiter_semaphore = NULL;
-      }
-      return 1;
-    }
-  }
-
-  if(my_config.load_slot){
+  if(my_config.load_slot != -1){
     loadstate_slot(my_config.load_slot);
   }
 
-  while(!sdl_quit) {
-    desmume_cycle(&sdl_quit, &boost, &my_config);
+#ifdef HAVE_LIBAGG
+  Desmume_InitOnce();
+  Hud.reset();
+  // Now that gtk port draws to RGBA buffer directly, the other one
+  // has to use ugly ways to make HUD rendering work again.
+  // desmume gtk: Sorry desmume-cli :(
+  aggDraw.hud = &agg_targetScreen_cli;
+  aggDraw.hud->setFont("verdana18_bold");
+#endif
 
+  ctrls_cfg.boost = 0;
+  ctrls_cfg.sdl_quit = 0;
+  ctrls_cfg.auto_pause = my_config.auto_pause;
+  ctrls_cfg.focused = 1;
+  ctrls_cfg.fake_mic = 0;
+  ctrls_cfg.keypad = 0;
+#ifdef INCLUDE_OPENGL_2D
+  ctrls_cfg.screen_texture = screen_texture;
+#else
+  ctrls_cfg.screen_texture = NULL;
+#endif
+  ctrls_cfg.resize_cb = &resizeWindow_stub;
+
+  while(!ctrls_cfg.sdl_quit) {
+    desmume_cycle(&ctrls_cfg);
+
+    osd->update();
+    DrawHUD();
 #ifdef INCLUDE_OPENGL_2D
     if ( my_config.opengl_2d) {
       opengl_Draw( screen_texture, my_config.soft_colour_convert);
+      ctrls_cfg.resize_cb = &resizeWindow;
     }
     else
 #endif
       Draw();
+    osd->clear();
 
     for ( int i = 0; i < my_config.frameskip; i++ ) {
         NDS_SkipNextFrame();
-        desmume_cycle(&sdl_quit, &boost, &my_config);
-    }
-
-    if ( !my_config.disable_limiter && !boost) {
-      limiter_frame_counter += 1 + my_config.frameskip;
-      if ( limiter_frame_counter >= my_config.fps_limiter_frame_period) {
-        limiter_frame_counter = 0;
-
-        /* wait for the timer to expire */
-        SDL_SemWait( fps_limiter_semaphore);
-      }
+        desmume_cycle(&ctrls_cfg);
     }
 
 #ifdef DISPLAY_FPS
+    now = SDL_GetTicks();
+#endif
+    if ( !my_config.disable_limiter && !ctrls_cfg.boost) {
+#ifndef DISPLAY_FPS
+      now = SDL_GetTicks();
+#endif
+      int delay =  (limiter_tick0 + limiter_frame_counter*1000/FPS_LIMITER_FPS) - now;
+      if (delay < -500 || delay > 100) { // reset if we fall too far behind don't want to run super fast until we catch up
+        limiter_tick0 = now;
+        limiter_frame_counter = 0;
+      } else if (delay > 0) {
+        SDL_Delay(delay);
+      }
+    }
+    // always count frames, we'll mess up if the limiter gets turned on later otherwise
+    limiter_frame_counter += 1 + my_config.frameskip;
+
+#ifdef DISPLAY_FPS
     fps_frame_counter += 1;
-    fps_temp_time = SDL_GetTicks();
-    fps_timing += fps_temp_time - fps_previous_time;
-    fps_previous_time = fps_temp_time;
+    fps_timing += now - fps_previous_time;
+    fps_previous_time = now;
 
     if ( fps_frame_counter == NUM_FRAMES_TO_TIME) {
       char win_title[20];
-      float fps = (float)fps_timing;
-      fps /= NUM_FRAMES_TO_TIME * 1000.f;
-      fps = 1.0f / fps;
+      float fps = NUM_FRAMES_TO_TIME * 1000.f / fps_timing;
 
       fps_frame_counter = 0;
       fps_timing = 0;
@@ -984,28 +820,22 @@ int main(int argc, char ** argv) {
 #endif
   }
 
-
-
   /* Unload joystick */
   uninit_joy();
 
-  if ( !my_config.disable_limiter) {
-    /* tidy up the FPS limiter timer and semaphore */
-    SDL_RemoveTimer( limiter_timer);
-    SDL_DestroySemaphore( fps_limiter_semaphore);
-  }
+#ifdef GDB_STUB
+  destroyStub_gdb( arm9_gdb_stub);
+  arm9_gdb_stub = NULL;
+  
+  destroyStub_gdb( arm7_gdb_stub);
+  arm7_gdb_stub = NULL;
 
+  gdbstub_mutex_destroy();
+#endif
+  
   SDL_Quit();
   NDS_DeInit();
 
-#ifdef GDB_STUB
-  if ( my_config.arm9_gdb_port != 0) {
-    destroyStub_gdb( arm9_gdb_stub);
-  }
-  if ( my_config.arm7_gdb_port != 0) {
-    destroyStub_gdb( arm7_gdb_stub);
-  }
-#endif
 
   return 0;
 }

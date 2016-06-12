@@ -1,37 +1,33 @@
-/*  
+/*
 	Copyright (C) 2007 Normmatt
+	Copyright (C) 2007-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
+
+#include "FirmConfig.h"
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "../common.h"
-#include <mmsystem.h>
-#include <COMMDLG.H>
 #include <string.h>
 
-#include "CWindow.h"
+#include "../NDSSystem.h"
+#include "../firmware.h"
 
 #include "resource.h"
-#include "FirmConfig.h"
-
-#include "../debug.h"
-#include "../NDSSystem.h"
+#include "CWindow.h"
+#include "winutil.h"
 
 static char nickname_buffer[11];
 static char message_buffer[27];
@@ -75,7 +71,7 @@ static void WriteFirmConfig( struct NDS_fw_config_data *fw_config)
 
 BOOL CALLBACK FirmConfig_Proc(HWND dialog,UINT komunikat,WPARAM wparam,LPARAM lparam)
 {
-	struct NDS_fw_config_data *fw_config = &win_fw_config;
+	struct NDS_fw_config_data *fw_config = &CommonSettings.fw_config;
 	int i;
 	char temp_str[27];
 
@@ -148,7 +144,8 @@ BOOL CALLBACK FirmConfig_Proc(HWND dialog,UINT komunikat,WPARAM wparam,LPARAM lp
 
 				WriteFirmConfig( fw_config);
 				EndDialog(dialog,0);
-				NDS_CreateDummyFirmware( fw_config);
+				if (CommonSettings.UseExtFirmware == 0)
+					NDS_CreateDummyFirmware( fw_config);
 				return 1;
 				}
 				else
