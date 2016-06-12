@@ -130,8 +130,14 @@ int main(int argc, char **argv)
 
 	backup_setManualBackupType(0);
 
-	if (NDS_LoadROM( "sdmc:/game.nds", NULL) < 0) {
-		printf("Error loading game.nds\n");
+	if( access( "sdmc:/game.img", F_OK ) != -1 ) {
+		if (NDS_LoadROM( "sdmc:/game.nds", "sdmc:/game.img") < 0) {
+			printf("Error loading game.nds\n");
+		}
+		} else {
+		if (NDS_LoadROM( "sdmc:/game.nds", "sdmc:/game.img") < 0) {
+			printf("Error loading game.nds\n");
+		}
 	}
 	
 	execute = TRUE;
