@@ -1,12 +1,34 @@
-#include "texcache.h"
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2006-2007 shash
+	Copyright (C) 2008-2015 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 #include <string.h>
 #include <algorithm>
+#include <assert.h>
+#include <map>
+
+#include "texcache.h"
 
 #include "bits.h"
 #include "common.h"
 #include "debug.h"
 #include "gfx3d.h"
+#include "MMU.h"
 #include "NDSSystem.h"
 
 using std::min;
@@ -15,14 +37,16 @@ using std::max;
 //only dump this from ogl renderer. for now, softrasterizer creates things in an incompatible pixel format
 //#define DEBUG_DUMP_TEXTURE
 
+#define CONVERT(color,alpha) ((TEXFORMAT == TexFormat_32bpp)?(RGB15TO32(color,alpha)):RGB15TO6665(color,alpha))
+
 //This class represents a number of regions of memory which should be viewed as contiguous
 class MemSpan
 {
 public:
-	static const int MAXSIZE = 8;
+	static const int MAXSIZE = 17; //max size for textures: 1024*1024*2 bytes / 128*1024 banks + 1 for wraparound
 
 	MemSpan() 
-		: numItems(0)
+		: numItems(0), size(0)
 	{}
 
 	int numItems;
@@ -53,6 +77,8 @@ public:
 		}
 		return 0;
 	}
+
+	//TODO - get rid of duplication between these two methods.
 
 	//dumps the memspan to the specified buffer
 	//you may set size to limit the size to be copied
@@ -119,9 +145,10 @@ static MemSpan MemSpan_TexMem(u32 ofs, u32 len)
 		len -= curr.len;
 		ofs += curr.len;
 		currofs += curr.len;
-		u8* ptr = ARM9Mem.texInfo.textureSlotAddr[slot];
+		u8* ptr = MMU.texInfo.textureSlotAddr[slot];
 		
-		if(ptr == ARM9Mem.blank_memory) {
+		//TODO - dont alert if the masterbrightnesses are max or min
+		if (ptr == MMU.blank_memory && !GPU->GetEngineMain()->GetIsMasterBrightFullIntensity()) {
 			PROGINFO("Tried to reference unmapped texture memory: slot %d\n",slot);
 		}
 		curr.ptr = ptr + curr.start;
@@ -130,7 +157,7 @@ static MemSpan MemSpan_TexMem(u32 ofs, u32 len)
 }
 
 //creates a MemSpan in texture palette memory
-static MemSpan MemSpan_TexPalette(u32 ofs, u32 len) 
+static MemSpan MemSpan_TexPalette(u32 ofs, u32 len, bool silent) 
 {
 	MemSpan ret;
 	ret.size = len;
@@ -139,7 +166,7 @@ static MemSpan MemSpan_TexPalette(u32 ofs, u32 len)
 		MemSpan::Item &curr = ret.items[ret.numItems++];
 		curr.start = ofs&0x3FFF;
 		u32 slot = (ofs>>14)&7; //this masks to 8 slots, but there are really only 6
-		if(slot>5) {
+		if(slot>5 && !silent) {
 			PROGINFO("Texture palette overruns texture memory. Wrapping at palette slot 0.\n");
 			slot -= 5;
 		}
@@ -150,9 +177,10 @@ static MemSpan MemSpan_TexPalette(u32 ofs, u32 len)
 		//if(len != 0) 
 			//here is an actual test case of bank spanning
 		currofs += curr.len;
-		u8* ptr = ARM9Mem.texInfo.texPalSlot[slot];
+		u8* ptr = MMU.texInfo.texPalSlot[slot];
 		
-		if(ptr == ARM9Mem.blank_memory) {
+		//TODO - dont alert if the masterbrightnesses are max or min
+		if(ptr == MMU.blank_memory && !GPU->GetEngineMain()->GetIsMasterBrightFullIntensity() && !silent) {
 			PROGINFO("Tried to reference unmapped texture palette memory: 16k slot #%d\n",slot);
 		}
 		curr.ptr = ptr + curr.start;
@@ -160,491 +188,657 @@ static MemSpan MemSpan_TexPalette(u32 ofs, u32 len)
 	return ret;
 }
 
-TextureCache *texcache;
-u32 texcache_start;
-u32 texcache_stop;
-u8 *TexCache_texMAP = NULL;
-
-
 #if defined (DEBUG_DUMP_TEXTURE) && defined (WIN32)
 #define DO_DEBUG_DUMP_TEXTURE
-static void DebugDumpTexture(int which)
+static void DebugDumpTexture(TexCacheItem* item)
 {
+	static int ctr=0;
 	char fname[100];
-	sprintf(fname,"c:\\dump\\%d.bmp", which);
+	sprintf(fname,"c:\\dump\\%d.bmp", ctr);
+	ctr++;
 
-	NDS_WriteBMP_32bppBuffer(texcache[which].sizeX,texcache[which].sizeY,TexCache_texMAP,fname);
+	NDS_WriteBMP_32bppBuffer(item->sizeX,item->sizeY,item->decoded,fname);
 }
 #endif
 
-
-static int lastTexture = -1;
-
-#define CONVERT(color,alpha) ((TEXFORMAT == TexFormat_32bpp)?(RGB15TO32(color,alpha)):RGB15TO5555(color,alpha))
-
-template<TexCache_TexFormat TEXFORMAT>
-void TexCache_SetTexture(u32 format, u32 texpal)
+class TexCache
 {
-	//for each texformat, number of palette entries
-	const int palSizes[] = {0, 32, 4, 16, 256, 0, 8, 0};
-
-	//for each texformat, multiplier from numtexels to numbytes (fixed point 30.2)
-	const int texSizes[] = {0, 4, 1, 2, 4, 1, 4, 8};
-
-	//used to hold a copy of the palette specified for this texture
-	u16 pal[256];
-
-	u32 *dwdst = (u32*)TexCache_texMAP;
-	
-	u32 textureMode = (unsigned short)((format>>26)&0x07);
-	unsigned int sizeX=(8 << ((format>>20)&0x07));
-	unsigned int sizeY=(8 << ((format>>23)&0x07));
-	unsigned int imageSize = sizeX*sizeY;
-
-	u8 *adr;
-
-	u32 paletteAddress;
-
-	switch (textureMode)
+public:
+	TexCache()
+		: cache_size(0)
 	{
-	case TEXMODE_I2:
-		paletteAddress = texpal<<3;
-		break;
-	case TEXMODE_A3I5: //a3i5
-	case TEXMODE_I4: //i4
-	case TEXMODE_I8: //i8
-	case TEXMODE_A5I3: //a5i3
-	case TEXMODE_16BPP: //16bpp
-	case TEXMODE_4X4: //4x4
-	default:
-		paletteAddress = texpal<<4;
-		break;
+		memset(paletteDump,0,sizeof(paletteDump));
 	}
 
-	//analyze the texture memory mapping and the specifications of this texture
-	int palSize = palSizes[textureMode];
-	int texSize = (imageSize*texSizes[textureMode])>>2; //shifted because the texSizes multiplier is fixed point
-	MemSpan ms = MemSpan_TexMem((format&0xFFFF)<<3,texSize);
-	MemSpan mspal = MemSpan_TexPalette(paletteAddress,palSize*2);
+	TTexCacheItemMultimap index;
 
-	//determine the location for 4x4 index data
-	u32 indexBase;
-	if((format & 0xc000) == 0x8000) indexBase = 0x30000;
-	else indexBase = 0x20000;
+	//this ought to be enough for anyone
+	//static const u32 kMaxCacheSize = 64*1024*1024; 
+	//changed by zeromus on 15-dec. I couldnt find any games that were getting anywhere NEAR 64
+	static const u32 kMaxCacheSize = 16*1024*1024; 
+	//metal slug burns through sprites so fast, it can test it pretty quickly though
 
-	u32 indexOffset = (format&0x3FFF)<<2;
+	//this is not really precise, it is off by a constant factor
+	u32 cache_size;
 
-	int indexSize = 0;
-	MemSpan msIndex;
-	if(textureMode == TEXMODE_4X4)
+	void list_remove(TexCacheItem* item)
 	{
-		indexSize = imageSize>>3;
-		msIndex = MemSpan_TexMem(indexOffset+indexBase,indexSize);
+		index.erase(item->iterator);
+		cache_size -= item->decode_len;
 	}
 
-
-	//dump the palette to a temp buffer, so that we don't have to worry about memory mapping.
-	//this isnt such a problem with texture memory, because we read sequentially from it.
-	//however, we read randomly from palette memory, so the mapping is more costly.
-#ifdef WORDS_BIGENDIAN
-	mspal.dump16(pal);
-#else
-	mspal.dump(pal);
-#endif
-
-
-	u32 tx=texcache_start;
-
-	//if(false)
-	while (TRUE)
+	void list_push_front(TexCacheItem* item)
 	{
-		//conditions where we give up and regenerate the texture:
-		if (texcache_stop == tx) break;
-		if (texcache[tx].frm == 0) break;
+		item->iterator = index.insert(std::make_pair(item->texformat,item));
+		cache_size += item->decode_len;
+	}
 
-		//conditions where we reject matches:
-		//when the teximage or texpal params dont match 
-		//(this is our key for identifying palettes in the cache)
-		if (texcache[tx].frm != format) goto REJECT;
-		if (texcache[tx].pal != texpal) goto REJECT;
+	template<TexCache_TexFormat TEXFORMAT>
+	TexCacheItem* scan(u32 format, u32 texpal)
+	{
+		//for each texformat, number of palette entries
+		static const int palSizes[] = {0, 32, 4, 16, 256, 0, 8, 0};
 
-		//the texture matches params, but isnt suspected invalid. accept it.
-		if (!texcache[tx].suspectedInvalid) goto ACCEPT;
+		//for each texformat, multiplier from numtexels to numbytes (fixed point 30.2)
+		static const int texSizes[] = {0, 4, 1, 2, 4, 1, 4, 8};
 
-		//if we couldnt cache this entire texture due to it being too large, then reject it
-		if (texSize+indexSize > (int)sizeof(texcache[tx].dump.texture)) goto REJECT;
+		//used to hold a copy of the palette specified for this texture
+		u16 pal[256];
 
-		//when the palettes dont match:
-		//note that we are considering 4x4 textures to have a palette size of 0.
-		//they really have a potentially HUGE palette, too big for us to handle like a normal palette,
-		//so they go through a different system
-		if (mspal.size != 0 && memcmp(texcache[tx].dump.palette,pal,mspal.size)) goto REJECT;
+		u32 textureMode = (unsigned short)((format>>26)&0x07);
+		u32 sizeX=(8 << ((format>>20)&0x07));
+		u32 sizeY=(8 << ((format>>23)&0x07));
+		u32 imageSize = sizeX*sizeY;
 
-		//when the texture data doesn't match
-		if(ms.memcmp(texcache[tx].dump.texture,sizeof(texcache[tx].dump.texture))) goto REJECT;
+		u8 *adr;
 
-		//if the texture is 4x4 then the index data must match
+		u32 paletteAddress;
+
+		switch (textureMode)
+		{
+		case TEXMODE_I2:
+			paletteAddress = texpal<<3;
+			break;
+		case TEXMODE_A3I5: //a3i5
+		case TEXMODE_I4: //i4
+		case TEXMODE_I8: //i8
+		case TEXMODE_A5I3: //a5i3
+		case TEXMODE_16BPP: //16bpp
+		case TEXMODE_4X4: //4x4
+		default:
+			paletteAddress = texpal<<4;
+			break;
+		}
+
+		//analyze the texture memory mapping and the specifications of this texture
+		int palSize = palSizes[textureMode];
+		int texSize = (imageSize*texSizes[textureMode])>>2; //shifted because the texSizes multiplier is fixed point
+		MemSpan ms = MemSpan_TexMem((format&0xFFFF)<<3,texSize);
+		MemSpan mspal = MemSpan_TexPalette(paletteAddress,palSize*2,false);
+
+		//determine the location for 4x4 index data
+		u32 indexBase;
+		if((format & 0xc000) == 0x8000) indexBase = 0x30000;
+		else indexBase = 0x20000;
+
+		u32 indexOffset = (format&0x3FFF)<<2;
+
+		int indexSize = 0;
+		MemSpan msIndex;
 		if(textureMode == TEXMODE_4X4)
 		{
-			if(msIndex.memcmp(texcache[tx].dump.texture + texcache[tx].dump.textureSize,texcache[tx].dump.indexSize)) goto REJECT; 
+			indexSize = imageSize>>3;
+			msIndex = MemSpan_TexMem(indexOffset+indexBase,indexSize);
 		}
 
 
-ACCEPT:
-		texcache[tx].suspectedInvalid = false;
-		if(lastTexture == -1 || (int)tx != lastTexture)
+		//dump the palette to a temp buffer, so that we don't have to worry about memory mapping.
+		//this isnt such a problem with texture memory, because we read sequentially from it.
+		//however, we read randomly from palette memory, so the mapping is more costly.
+		#ifdef WORDS_BIGENDIAN
+			mspal.dump16(pal);
+		#else
+			mspal.dump(pal);
+		#endif
+
+			//TODO - as a special optimization, keep the last item returned and check it first
+
+		for(std::pair<TTexCacheItemMultimap::iterator,TTexCacheItemMultimap::iterator>
+			iters = index.equal_range(format);
+			iters.first != iters.second;
+			++iters.first)
 		{
-			lastTexture = tx;
-			if(TexCache_BindTexture)
-				TexCache_BindTexture(tx);
-		}
-		return;
- 
-REJECT:
-		tx++;
-		if ( tx > MAX_TEXTURE )
-		{
-			texcache_stop=texcache_start;
-			texcache[texcache_stop].frm=0;
-			texcache_start++;
-			if (texcache_start>MAX_TEXTURE) 
+			TexCacheItem* curr = iters.first->second;
+			
+			//conditions where we reject matches:
+			//when the teximage or texpal params dont match 
+			//(this is our key for identifying textures in the cache)
+			//NEW: due to using format as a key we dont need to check this anymore
+			//if(curr->texformat != format) continue;
+			if(curr->texpal != texpal) continue;
+
+			//we're being asked for a different format than what we had cached.
+			//TODO - this could be done at the entire cache level instead of checking repeatedly
+			if(curr->cacheFormat != TEXFORMAT) goto REJECT;
+
+			//if the texture is assumed invalid, reject it
+			if(curr->assumedInvalid) goto REJECT; 
+
+			//the texture matches params, but isnt suspected invalid. accept it.
+			if(!curr->suspectedInvalid) return curr;
+
+			//we suspect the texture may be invalid. we need to do a byte-for-byte comparison to re-establish that it is valid:
+
+			//when the palettes dont match:
+			//note that we are considering 4x4 textures to have a palette size of 0.
+			//they really have a potentially HUGE palette, too big for us to handle like a normal palette,
+			//so they go through a different system
+			if(mspal.size != 0 && memcmp(curr->dump.palette,pal,mspal.size)) goto REJECT;
+
+			//when the texture data doesn't match
+			if(ms.memcmp(&curr->dump.texture[0],curr->dump.textureSize)) goto REJECT;
+
+			//if the texture is 4x4 then the index data must match
+			if(textureMode == TEXMODE_4X4)
 			{
-				texcache_start=0;
-				texcache_stop=MAX_TEXTURE<<1;
-			}
-			tx=0;
-		}
-	}
-
-	lastTexture = tx;
-	//glBindTexture(GL_TEXTURE_2D, texcache[tx].id);
-
-	texcache[tx].suspectedInvalid = false;
-	texcache[tx].frm=format;
-	texcache[tx].mode=textureMode;
-	texcache[tx].pal=texpal;
-	texcache[tx].sizeX=sizeX;
-	texcache[tx].sizeY=sizeY;
-	texcache[tx].invSizeX=1.0f/((float)(sizeX));
-	texcache[tx].invSizeY=1.0f/((float)(sizeY));
-	texcache[tx].dump.textureSize = ms.dump(texcache[tx].dump.texture,sizeof(texcache[tx].dump.texture));
-
-	//dump palette data for cache keying
-	if ( palSize )
-	{
-		memcpy(texcache[tx].dump.palette, pal, palSize*2);
-	}
-	//dump 4x4 index data for cache keying
-	texcache[tx].dump.indexSize = 0;
-	if(textureMode == TEXMODE_4X4)
-	{
-		texcache[tx].dump.indexSize = min(msIndex.size,(int)sizeof(texcache[tx].dump.texture) - texcache[tx].dump.textureSize);
-		msIndex.dump(texcache[tx].dump.texture+texcache[tx].dump.textureSize,texcache[tx].dump.indexSize);
-	}
-
-
-	//INFO("Texture %03i - format=%08X; pal=%04X (mode %X, width %04i, height %04i)\n",i, texcache[i].frm, texcache[i].pal, texcache[i].mode, sizeX, sizeY);
-
-	//============================================================================ Texture conversion
-	const u32 opaqueColor = TEXFORMAT==TexFormat_32bpp?255:31;
-	u32 palZeroTransparent = (1-((format>>29)&1))*opaqueColor;
-
-	switch (texcache[tx].mode)
-	{
-	case TEXMODE_A3I5:
-		{
-			for(int j=0;j<ms.numItems;j++) {
-				adr = ms.items[j].ptr;
-				for(u32 x = 0; x < ms.items[j].len; x++)
-				{
-					u16 c = pal[*adr&31];
-					u8 alpha = *adr>>5;
-					if(TEXFORMAT == TexFormat_15bpp)
-						*dwdst++ = RGB15TO5555(c,material_3bit_to_5bit[alpha]);
-					else
-						*dwdst++ = RGB15TO32(c,material_3bit_to_8bit[alpha]);
-					adr++;
-				}
+				if(msIndex.memcmp(curr->dump.texture + curr->dump.textureSize,curr->dump.indexSize)) goto REJECT; 
 			}
 
+			//we found a match. just return it
+			//REMINDER to make it primary/newest when we have smarter code
+			//list_remove(curr);
+			//list_push_front(curr);
+			curr->suspectedInvalid = false;
+			return curr;
+
+		REJECT:
+			//we found a cached item for the current address, but the data is stale.
+			//for a variety of complicated reasons, we need to throw it out right this instant.
+			list_remove(curr);
+			delete curr;
 			break;
 		}
-	case TEXMODE_I2:
+
+		//item was not found. recruit an existing one (the oldest), or create a new one
+		//evict(); //reduce the size of the cache if necessary
+		//TODO - as a peculiarity of the texcache, eviction must happen after the entire 3d frame runs
+		//to support separate cache and read passes
+		TexCacheItem* newitem = new TexCacheItem();
+		newitem->suspectedInvalid = false;
+		newitem->texformat = format;
+		newitem->cacheFormat = TEXFORMAT;
+		newitem->texpal = texpal;
+		newitem->sizeX=sizeX;
+		newitem->sizeY=sizeY;
+		newitem->invSizeX=1.0f/((float)(sizeX));
+		newitem->invSizeY=1.0f/((float)(sizeY));
+		newitem->decode_len = sizeX*sizeY*4;
+		newitem->mode = textureMode;
+		newitem->decoded = new u8[newitem->decode_len];
+		list_push_front(newitem);
+		//printf("allocating: up to %d with %d items\n",cache_size,index.size());
+
+		u32 *dwdst = (u32*)newitem->decoded;
+		
+		//dump palette data for cache keying
+		if(palSize)
 		{
-			for(int j=0;j<ms.numItems;j++) {
-				adr = ms.items[j].ptr;
-				for(u32 x = 0; x < ms.items[j].len; x++)
-				{
-					u8 bits;
-					u16 c;
-
-					bits = (*adr)&0x3;
-					c = pal[bits];
-					*dwdst++ = CONVERT(c,(bits == 0) ? palZeroTransparent : opaqueColor);
-
-					bits = ((*adr)>>2)&0x3;
-					c = pal[bits];
-					*dwdst++ = CONVERT(c,(bits == 0) ? palZeroTransparent : opaqueColor);
-
-					bits = ((*adr)>>4)&0x3;
-					c = pal[bits];
-					*dwdst++ = CONVERT(c,(bits == 0) ? palZeroTransparent : opaqueColor);
-
-					bits = ((*adr)>>6)&0x3;
-					c = pal[bits];
-					*dwdst++ = CONVERT(c,(bits == 0) ? palZeroTransparent : opaqueColor);
-
-					adr++;
-				}
-			}
-			break;
+			memcpy(newitem->dump.palette, pal, palSize*2);
 		}
-	case TEXMODE_I4:
+
+		//dump texture and 4x4 index data for cache keying
+		const int texsize = newitem->dump.textureSize = ms.size;
+		const int indexsize = newitem->dump.indexSize = msIndex.size;
+		newitem->dump.texture = new u8[texsize+indexsize];
+		ms.dump(&newitem->dump.texture[0],newitem->dump.maxTextureSize); //dump texture
+		if(textureMode == TEXMODE_4X4)
+			msIndex.dump(newitem->dump.texture+newitem->dump.textureSize,newitem->dump.indexSize); //dump 4x4
+
+
+		//============================================================================ 
+		//Texture conversion
+		//============================================================================
+		
+		// Whenever a 1-bit alpha or no-alpha texture is unpacked (this means any texture
+		// format that is not A3I5 or A5I3), set all transparent pixels to 0 so that 3D
+		// renderers can assume that the transparent color is 0 during texture sampling.
+
+		const u8 opaqueColor = (TEXFORMAT == TexFormat_32bpp) ? 0xFF : 0x1F;
+		const u8 palZeroTransparent = ( 1 - ((format>>29) & 1) ) * opaqueColor;
+
+		switch (newitem->mode)
 		{
-			for(int j=0;j<ms.numItems;j++) {
-				adr = ms.items[j].ptr;
-				for(u32 x = 0; x < ms.items[j].len; x++)
-				{
-					u8 bits;
-					u16 c;
-
-					bits = (*adr)&0xF;
-					c = pal[bits];
-					*dwdst++ = CONVERT(c,(bits == 0) ? palZeroTransparent : opaqueColor);
-
-					bits = ((*adr)>>4);
-					c = pal[bits];
-					*dwdst++ = CONVERT(c,(bits == 0) ? palZeroTransparent : opaqueColor);
-					adr++;
-				}
-			}
-			break;
-		}
-	case TEXMODE_I8:
-		{
-			for(int j=0;j<ms.numItems;j++) {
-				adr = ms.items[j].ptr;
-				for(u32 x = 0; x < ms.items[j].len; ++x)
-				{
-					u16 c = pal[*adr];
-					*dwdst++ = CONVERT(c,(*adr == 0) ? palZeroTransparent : opaqueColor);
-					adr++;
-				}
-			}
-		}
-		break;
-	case TEXMODE_4X4:
-		{
-			//RGB16TO32 is used here because the other conversion macros result in broken interpolation logic
-
-			if(ms.numItems != 1) {
-				PROGINFO("Your 4x4 texture has overrun its texture slot.\n");
-			}
-			//this check isnt necessary since the addressing is tied to the texture data which will also run out:
-			//if(msIndex.numItems != 1) PROGINFO("Your 4x4 texture index has overrun its slot.\n");
-
-#define PAL4X4(offset) ( *(u16*)( ARM9Mem.texInfo.texPalSlot[((paletteAddress + (offset)*2)>>14)] + ((paletteAddress + (offset)*2)&0x3FFF) ) )
-
-			u16* slot1;
-			u32* map = (u32*)ms.items[0].ptr;
-			u32 limit = ms.items[0].len<<2;
-			u32 d = 0;
-			if ( (texcache[tx].frm & 0xc000) == 0x8000)
-				// texel are in slot 2
-				slot1=(u16*)&ARM9Mem.texInfo.textureSlotAddr[1][((texcache[tx].frm & 0x3FFF)<<2)+0x010000];
-			else 
-				slot1=(u16*)&ARM9Mem.texInfo.textureSlotAddr[1][(texcache[tx].frm & 0x3FFF)<<2];
-
-			u16 yTmpSize = (texcache[tx].sizeY>>2);
-			u16 xTmpSize = (texcache[tx].sizeX>>2);
-
-			//this is flagged whenever a 4x4 overruns its slot.
-			//i am guessing we just generate black in that case
-			bool dead = false;
-
-			for (int y = 0; y < yTmpSize; y ++)
+			case TEXMODE_A3I5:
 			{
-				u32 tmpPos[4]={(y<<2)*texcache[tx].sizeX,((y<<2)+1)*texcache[tx].sizeX,
-					((y<<2)+2)*texcache[tx].sizeX,((y<<2)+3)*texcache[tx].sizeX};
-				for (int x = 0; x < xTmpSize; x ++, d++)
+				for(int j=0;j<ms.numItems;j++)
 				{
-					if(d >= limit)
-						dead = true;
-
-					if(dead) {
-						for (int sy = 0; sy < 4; sy++)
-						{
-							u32 currentPos = (x<<2) + tmpPos[sy];
-							dwdst[currentPos] = dwdst[currentPos+1] = dwdst[currentPos+2] = dwdst[currentPos+3] = 0;
-						}
-						continue;
-					}
-
-					u32 currBlock	= map[d];
-					u16 pal1		= slot1[d];
-					u16 pal1offset	= (pal1 & 0x3FFF)<<1;
-					u8  mode		= pal1>>14;
-					u32 tmp_col[4];
-					
-					tmp_col[0]=RGB16TO32(PAL4X4(pal1offset),255);
-					tmp_col[1]=RGB16TO32(PAL4X4(pal1offset+1),255);
-
-					switch (mode) 
+					adr = ms.items[j].ptr;
+					for(u32 x = 0; x < ms.items[j].len; x++)
 					{
-					case 0:
-						tmp_col[2]=RGB16TO32(PAL4X4(pal1offset+2),255);
-						tmp_col[3]=RGB16TO32(0x7FFF,0);
-						break;
-					case 1:
-						tmp_col[2]=(((tmp_col[0]&0xFF)+(tmp_col[1]&0xff))>>1)|
-							(((tmp_col[0]&(0xFF<<8))+(tmp_col[1]&(0xFF<<8)))>>1)|
-							(((tmp_col[0]&(0xFF<<16))+(tmp_col[1]&(0xFF<<16)))>>1)|
-							(0xff<<24);
-						tmp_col[3]=RGB16TO32(0x7FFF,0);
-						break;
-					case 2:
-						tmp_col[2]=RGB16TO32(PAL4X4(pal1offset+2),255);
-						tmp_col[3]=RGB16TO32(PAL4X4(pal1offset+3),255);
-						break;
-					case 3: 
-						{
-							u32 red1, red2;
-							u32 green1, green2;
-							u32 blue1, blue2;
-							u16 tmp1, tmp2;
-
-							red1=tmp_col[0]&0xff;
-							green1=(tmp_col[0]>>8)&0xff;
-							blue1=(tmp_col[0]>>16)&0xff;
-							red2=tmp_col[1]&0xff;
-							green2=(tmp_col[1]>>8)&0xff;
-							blue2=(tmp_col[1]>>16)&0xff;
-
-							tmp1=((red1*5+red2*3)>>6)|
-								(((green1*5+green2*3)>>6)<<5)|
-								(((blue1*5+blue2*3)>>6)<<10);
-							tmp2=((red2*5+red1*3)>>6)|
-								(((green2*5+green1*3)>>6)<<5)|
-								(((blue2*5+blue1*3)>>6)<<10);
-
-							tmp_col[2]=RGB16TO32(tmp1,255);
-							tmp_col[3]=RGB16TO32(tmp2,255);
-							break;
-						}
+						u16 c = pal[*adr&31];
+						u8 alpha = *adr>>5;
+						if(TEXFORMAT == TexFormat_15bpp)
+							*dwdst++ = RGB15TO6665(c,material_3bit_to_5bit[alpha]);
+						else
+							*dwdst++ = RGB15TO32(c,material_3bit_to_8bit[alpha]);
+						adr++;
 					}
-
-					if(TEXFORMAT==TexFormat_15bpp)
-					{
-						for(int i=0;i<4;i++)
-						{
-							tmp_col[i] >>= 3;
-							tmp_col[i] &= 0x1F1F1F1F;
-						}
-					}
-
-					//TODO - this could be more precise for 32bpp mode (run it through the color separation table)
-
-					//set all 16 texels
-					for (int sy = 0; sy < 4; sy++)
-					{
-						// Texture offset
-						u32 currentPos = (x<<2) + tmpPos[sy];
-						u8 currRow = (u8)((currBlock>>(sy<<3))&0xFF);
-
-						dwdst[currentPos] = tmp_col[currRow&3];
-						dwdst[currentPos+1] = tmp_col[(currRow>>2)&3];
-						dwdst[currentPos+2] = tmp_col[(currRow>>4)&3];
-						dwdst[currentPos+3] = tmp_col[(currRow>>6)&3];
-					}
-
-
 				}
+				break;
 			}
 
-
-			break;
-		}
-	case TEXMODE_A5I3:
-		{
-			for(int j=0;j<ms.numItems;j++) {
-				adr = ms.items[j].ptr;
-				for(u32 x = 0; x < ms.items[j].len; ++x)
+			case TEXMODE_I2:
+			{
+				if (palZeroTransparent == 0)
 				{
-					u16 c = pal[*adr&0x07];
-					u8 alpha = (*adr>>3);
-					if(TEXFORMAT == TexFormat_15bpp)
-						*dwdst++ = RGB15TO5555(c,alpha);
-					else
-						*dwdst++ = RGB15TO32(c,material_5bit_to_8bit[alpha]);
-					adr++;
+					for(int j=0;j<ms.numItems;j++)
+					{
+						adr = ms.items[j].ptr;
+						for(u32 x = 0; x < ms.items[j].len; x++)
+						{
+							u8 bits;
+							u16 c;
+							
+							bits = (*adr)&0x3;
+							c = pal[bits];
+							*dwdst++ = (bits == 0) ? 0 : CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>2)&0x3;
+							c = pal[bits];
+							*dwdst++ = (bits == 0) ? 0 : CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>4)&0x3;
+							c = pal[bits];
+							*dwdst++ = (bits == 0) ? 0 : CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>6)&0x3;
+							c = pal[bits];
+							*dwdst++ = (bits == 0) ? 0 : CONVERT(c,opaqueColor);
+							
+							adr++;
+						}
+					}
 				}
-			}
-			break;
-		}
-	case TEXMODE_16BPP:
-		{
-			for(int j=0;j<ms.numItems;j++) {
-				u16* map = (u16*)ms.items[j].ptr;
-				int len = ms.items[j].len>>1;
-				for(u32 x = 0; x < len; ++x)
+				else
 				{
-					u16 c = map[x];
-					int alpha = ((c&0x8000)?opaqueColor:0);
-					*dwdst++ = CONVERT(c&0x7FFF,alpha);
+					for(int j=0;j<ms.numItems;j++)
+					{
+						adr = ms.items[j].ptr;
+						for(u32 x = 0; x < ms.items[j].len; x++)
+						{
+							u8 bits;
+							u16 c;
+							
+							bits = (*adr)&0x3;
+							c = pal[bits];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>2)&0x3;
+							c = pal[bits];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>4)&0x3;
+							c = pal[bits];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>6)&0x3;
+							c = pal[bits];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							
+							adr++;
+						}
+					}
 				}
+				break;
 			}
-			break;
-		}
-	}
+				
+			case TEXMODE_I4:
+			{
+				if (palZeroTransparent == 0)
+				{
+					for(int j=0;j<ms.numItems;j++)
+					{
+						adr = ms.items[j].ptr;
+						for(u32 x = 0; x < ms.items[j].len; x++)
+						{
+							u8 bits;
+							u16 c;
+							
+							bits = (*adr)&0xF;
+							c = pal[bits];
+							*dwdst++ = (bits == 0) ? 0 : CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>4);
+							c = pal[bits];
+							*dwdst++ = (bits == 0) ? 0 : CONVERT(c,opaqueColor);
+							adr++;
+						}
+					}
+				}
+				else
+				{
+					for(int j=0;j<ms.numItems;j++)
+					{
+						adr = ms.items[j].ptr;
+						for(u32 x = 0; x < ms.items[j].len; x++)
+						{
+							u8 bits;
+							u16 c;
+							
+							bits = (*adr)&0xF;
+							c = pal[bits];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							
+							bits = ((*adr)>>4);
+							c = pal[bits];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							adr++;
+						}
+					}
+				}
+				break;
+			}
+				
+			case TEXMODE_I8:
+			{
+				if (palZeroTransparent == 0)
+				{
+					for(int j=0;j<ms.numItems;j++)
+					{
+						adr = ms.items[j].ptr;
+						for(u32 x = 0; x < ms.items[j].len; ++x)
+						{
+							u16 c = pal[*adr];
+							*dwdst++ = (*adr == 0) ? 0 : CONVERT(c,opaqueColor);
+							adr++;
+						}
+					}
+				}
+				else
+				{
+					for(int j=0;j<ms.numItems;j++)
+					{
+						adr = ms.items[j].ptr;
+						for(u32 x = 0; x < ms.items[j].len; ++x)
+						{
+							u16 c = pal[*adr];
+							*dwdst++ = CONVERT(c,opaqueColor);
+							adr++;
+						}
+					}
+				}
+				break;
+			}
+				
+			case TEXMODE_4X4:
+			{
+				if(ms.numItems != 1) {
+					PROGINFO("Your 4x4 texture has overrun its texture slot.\n");
+				}
+				//this check isnt necessary since the addressing is tied to the texture data which will also run out:
+				//if(msIndex.numItems != 1) PROGINFO("Your 4x4 texture index has overrun its slot.\n");
 
-	if(TexCache_BindTextureData != 0)
-		TexCache_BindTextureData(tx,TexCache_texMAP);
+	#define PAL4X4(offset) LE_TO_LOCAL_16( *(u16*)( MMU.texInfo.texPalSlot[((paletteAddress + (offset)*2)>>14)&0x7] + ((paletteAddress + (offset)*2)&0x3FFF) ) )
 
-#ifdef DO_DEBUG_DUMP_TEXTURE
-	DebugDumpTexture(tx);
+				u16* slot1;
+				u32* map = (u32*)ms.items[0].ptr;
+				u32 limit = ms.items[0].len<<2;
+				u32 d = 0;
+				if ( (format & 0xc000) == 0x8000)
+					// texel are in slot 2
+					slot1=(u16*)&MMU.texInfo.textureSlotAddr[1][((format & 0x3FFF)<<2)+0x010000];
+				else 
+					slot1=(u16*)&MMU.texInfo.textureSlotAddr[1][(format & 0x3FFF)<<2];
+
+				u16 yTmpSize = (sizeY>>2);
+				u16 xTmpSize = (sizeX>>2);
+
+				//this is flagged whenever a 4x4 overruns its slot.
+				//i am guessing we just generate black in that case
+				bool dead = false;
+
+				for (int y = 0; y < yTmpSize; y ++)
+				{
+					u32 tmpPos[4]={(y<<2)*sizeX,((y<<2)+1)*sizeX,
+						((y<<2)+2)*sizeX,((y<<2)+3)*sizeX};
+					for (int x = 0; x < xTmpSize; x ++, d++)
+					{
+						if(d >= limit)
+							dead = true;
+
+						if(dead) {
+							for (int sy = 0; sy < 4; sy++)
+							{
+								u32 currentPos = (x<<2) + tmpPos[sy];
+								dwdst[currentPos] = dwdst[currentPos+1] = dwdst[currentPos+2] = dwdst[currentPos+3] = 0;
+							}
+							continue;
+						}
+
+						u32 currBlock	= LE_TO_LOCAL_32(map[d]);
+						u16 pal1		= LE_TO_LOCAL_16(slot1[d]);
+						u16 pal1offset	= (pal1 & 0x3FFF)<<1;
+						u8  mode		= pal1>>14;
+						u32 tmp_col[4];
+						
+						tmp_col[0] = RGB15TO32( PAL4X4(pal1offset), 0xFF );
+						tmp_col[1] = RGB15TO32( PAL4X4(pal1offset+1), 0xFF );
+
+						switch (mode) 
+						{
+							case 0:
+								tmp_col[2] = RGB15TO32( PAL4X4(pal1offset+2), 0xFF );
+								tmp_col[3] = 0x00000000;
+								break;
+								
+							case 1:
+#ifdef LOCAL_BE
+								tmp_col[2]	= ( (((tmp_col[0] & 0xFF000000) >> 1)+((tmp_col[1] & 0xFF000000)  >> 1)) & 0xFF000000 ) |
+											  ( (((tmp_col[0] & 0x00FF0000)      + (tmp_col[1] & 0x00FF0000)) >> 1)  & 0x00FF0000 ) |
+											  ( (((tmp_col[0] & 0x0000FF00)      + (tmp_col[1] & 0x0000FF00)) >> 1)  & 0x0000FF00 ) |
+											  0x000000FF;
+								tmp_col[3]	= 0x00000000;
+#else
+								tmp_col[2]	= ( (((tmp_col[0] & 0x00FF00FF) + (tmp_col[1] & 0x00FF00FF)) >> 1) & 0x00FF00FF ) |
+											  ( (((tmp_col[0] & 0x0000FF00) + (tmp_col[1] & 0x0000FF00)) >> 1) & 0x0000FF00 ) |
+											  0xFF000000;
+								tmp_col[3]	= 0x00000000;
+#endif
+								break;
+								
+							case 2:
+								tmp_col[2] = RGB15TO32( PAL4X4(pal1offset+2), 0xFF );
+								tmp_col[3] = RGB15TO32( PAL4X4(pal1offset+3), 0xFF );
+								break;
+								
+							case 3:
+							{
+#ifdef LOCAL_BE
+								const u32 r0	= (tmp_col[0]>>24) & 0x000000FF;
+								const u32 r1	= (tmp_col[1]>>24) & 0x000000FF;
+								const u32 g0	= (tmp_col[0]>>16) & 0x000000FF;
+								const u32 g1	= (tmp_col[1]>>16) & 0x000000FF;
+								const u32 b0	= (tmp_col[0]>> 8) & 0x000000FF;
+								const u32 b1	= (tmp_col[1]>> 8) & 0x000000FF;
+#else
+								const u32 r0	=  tmp_col[0]      & 0x000000FF;
+								const u32 r1	=  tmp_col[1]      & 0x000000FF;
+								const u32 g0	= (tmp_col[0]>> 8) & 0x000000FF;
+								const u32 g1	= (tmp_col[1]>> 8) & 0x000000FF;
+								const u32 b0	= (tmp_col[0]>>16) & 0x000000FF;
+								const u32 b1	= (tmp_col[1]>>16) & 0x000000FF;
 #endif
 
-}
+								const u16 tmp1	= (  (r0*5 + r1*3)>>6) |
+												  ( ((g0*5 + g1*3)>>6) <<  5 ) |
+												  ( ((b0*5 + b1*3)>>6) << 10 );
+								const u16 tmp2	= (  (r0*3 + r1*5)>>6) |
+												  ( ((g0*3 + g1*5)>>6) <<  5 ) |
+												  ( ((b0*3 + b1*5)>>6) << 10 );
+
+								tmp_col[2] = RGB15TO32(tmp1, 0xFF);
+								tmp_col[3] = RGB15TO32(tmp2, 0xFF);
+								break;
+							}
+						}
+
+						if(TEXFORMAT==TexFormat_15bpp)
+						{
+							for (size_t i = 0; i < 4; i++)
+							{
+#ifdef LOCAL_BE
+								const u32 a = (tmp_col[i] >> 3) & 0x0000001F;
+								tmp_col[i] >>= 2;
+								tmp_col[i] &= 0x3F3F3F00;
+								tmp_col[i] |= a;
+#else
+								const u32 a = (tmp_col[i] >> 3) & 0x1F000000;
+								tmp_col[i] >>= 2;
+								tmp_col[i] &= 0x003F3F3F;
+								tmp_col[i] |= a;
+#endif
+							}
+						}
+
+						//TODO - this could be more precise for 32bpp mode (run it through the color separation table)
+
+						//set all 16 texels
+						for (size_t sy = 0; sy < 4; sy++)
+						{
+							// Texture offset
+							u32 currentPos = (x<<2) + tmpPos[sy];
+							u8 currRow = (u8)((currBlock>>(sy<<3))&0xFF);
+
+							dwdst[currentPos  ] = tmp_col[ currRow    &3];
+							dwdst[currentPos+1] = tmp_col[(currRow>>2)&3];
+							dwdst[currentPos+2] = tmp_col[(currRow>>4)&3];
+							dwdst[currentPos+3] = tmp_col[(currRow>>6)&3];
+						}
+					}
+				}
+				break;
+			}
+				
+			case TEXMODE_A5I3:
+			{
+				for(int j=0;j<ms.numItems;j++)
+				{
+					adr = ms.items[j].ptr;
+					for(u32 x = 0; x < ms.items[j].len; ++x)
+					{
+						u16 c = pal[*adr&0x07];
+						u8 alpha = (*adr>>3);
+						if(TEXFORMAT == TexFormat_15bpp)
+							*dwdst++ = RGB15TO6665(c,alpha);
+						else
+							*dwdst++ = RGB15TO32(c,material_5bit_to_8bit[alpha]);
+						adr++;
+					}
+				}
+				break;
+			}
+				
+			case TEXMODE_16BPP:
+			{
+				for(int j=0;j<ms.numItems;j++)
+				{
+					u16* map = (u16*)ms.items[j].ptr;
+					int len = ms.items[j].len>>1;
+					
+					for(int x = 0; x < len; ++x)
+					{
+						u16 c = map[x];
+						*dwdst++ = (c & 0x8000) ? CONVERT(c&0x7FFF,opaqueColor) : 0;
+					}
+				}
+				break;
+			}
+		} //switch(texture format)
+
+#ifdef DO_DEBUG_DUMP_TEXTURE
+	DebugDumpTexture(newitem);
+#endif
+
+		return newitem;
+	} //scan()
+
+	static const int PALETTE_DUMP_SIZE = (64+16+16)*1024;
+	u8 paletteDump[PALETTE_DUMP_SIZE];
+
+	void invalidate()
+	{
+		//check whether the palette memory changed
+		//TODO - we should handle this instead by setting dirty flags in the vram memory mapping and noting whether palette memory was dirty.
+		//but this will work for now
+		MemSpan mspal = MemSpan_TexPalette(0,PALETTE_DUMP_SIZE,true);
+		bool paletteDirty = mspal.memcmp(paletteDump);
+		if(paletteDirty)
+		{
+			mspal.dump(paletteDump);
+		}
+
+		for(TTexCacheItemMultimap::iterator it(index.begin()); it != index.end(); ++it)
+		{
+			it->second->suspectedInvalid = true;
+			
+			//when the palette changes, we assume all 4x4 textures are dirty.
+			//this is because each 4x4 item doesnt carry along with it a copy of the entire palette, for verification
+			//instead, we just use the one paletteDump for verifying of all 4x4 textures; and if paletteDirty is set, verification has failed
+			if(it->second->getTextureMode() == TEXMODE_4X4 && paletteDirty)
+			{
+				it->second->assumedInvalid = true;
+			}
+		}
+	}
+
+	void evict(u32 target = kMaxCacheSize)
+	{
+		//debug print
+		//printf("%d %d/%d\n",index.size(),cache_size/1024,target/1024);
+
+		//dont do anything unless we're over the target
+		if(cache_size<target) return;
+
+		//aim at cutting the cache to half of the max size
+		target/=2;
+
+		//evicts items in an arbitrary order until it is less than the max cache size
+		//TODO - do this based on age and not arbitrarily
+		while(cache_size > target)
+		{
+			if(index.size()==0) break; //just in case.. doesnt seem possible, cache_size wouldve been 0
+
+			TexCacheItem* item = index.begin()->second;
+			list_remove(item);
+			//printf("evicting! totalsize:%d\n",cache_size);
+			delete item;
+		}
+	}
+} texCache;
 
 void TexCache_Reset()
 {
-	if(TexCache_texMAP == NULL) TexCache_texMAP = (u8*)malloc(1024*2048*1);
-	if(texcache == NULL) texcache = (TextureCache*)malloc(sizeof(TextureCache)* (MAX_TEXTURE+1));
-
-	memset(texcache,0,sizeof(TextureCache[MAX_TEXTURE+1]));
-
-	texcache_start=0;
-	texcache_stop=MAX_TEXTURE<<1;
-}
-
-TextureCache* TexCache_Curr()
-{
-	if(lastTexture == -1)
-		return NULL;
-	else return &texcache[lastTexture];
+	texCache.evict(0);
 }
 
 void TexCache_Invalidate()
 {
-	//well, this is a very blunt instrument.
-	//lets just flag all the textures as invalid.
-	for(int i=0;i<MAX_TEXTURE+1;i++) {
-		texcache[i].suspectedInvalid = true;
+	//note that this gets called whether texdata or texpalette gets reconfigured.
+	texCache.invalidate();
+}
 
-		//invalidate all 4x4 textures when texture palettes change mappings
-		//this is necessary because we arent tracking 4x4 texture palettes to look for changes.
-		//Although I concede this is a bit paranoid.. I think the odds of anyone changing 4x4 palette data
-		//without also changing the texture data is pretty much zero.
-		//
-		//TODO - move this to a separate signal: split into TexReconfigureSignal and TexPaletteReconfigureSignal
-		if(texcache[i].mode == TEXMODE_4X4)
-			texcache[i].frm = 0;
+TexCacheItem* TexCache_SetTexture(TexCache_TexFormat TEXFORMAT, u32 format, u32 texpal)
+{
+	switch(TEXFORMAT)
+	{
+	case TexFormat_32bpp: return texCache.scan<TexFormat_32bpp>(format,texpal);
+	case TexFormat_15bpp: return texCache.scan<TexFormat_15bpp>(format,texpal);
+	default: assert(false); return NULL;
 	}
 }
 
-void (*TexCache_BindTexture)(u32 texnum) = NULL;
-void (*TexCache_BindTextureData)(u32 texnum, u8* data);
-
-//these templates needed to be instantiated manually
-template void TexCache_SetTexture<TexFormat_32bpp>(u32 format, u32 texpal);
-template void TexCache_SetTexture<TexFormat_15bpp>(u32 format, u32 texpal);
+//call this periodically to keep the tex cache clean
+void TexCache_EvictFrame()
+{
+	texCache.evict();
+}

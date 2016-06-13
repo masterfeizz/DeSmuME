@@ -1,22 +1,19 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2006-2012 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <stdio.h>
@@ -265,7 +262,7 @@ const char MSR_FIELD[16][5] = {
                }\
           }\
      }\
-     lreg[strlen(lreg)-1]='\0';
+     if(*lreg) lreg[strlen(lreg)-1]='\0';
 
 static char * OP_UND(u32 adr, u32 i, char * txt)
 {
@@ -2133,6 +2130,11 @@ static char * OP_LDR_M_IMM_OFF(u32 adr, u32 i, char * txt)
 		sprintf(txt, "LDR%s %s, [%s, -#%X]", Condition[CONDITION(i)], Registre[REG_POS(i,12)], Registre[REG_POS(i,16)], (int)(i&0x7FF));
 return txt;}
 
+static char * OP_LDREX(u32 adr, u32 i, char * txt)
+{
+	sprintf(txt, "LDREX%s %s, [%s]", Condition[CONDITION(i)], Registre[REG_POS(i,12)], Registre[REG_POS(i,16)]);
+return txt;}
+
 static char * OP_LDR_P_LSL_IMM_OFF(u32 adr, u32 i, char * txt)
 {
      LDRSTR_LSL_IMM(LDR, "", "", "]");
@@ -2442,6 +2444,11 @@ static char * OP_STR_M_IMM_OFF(u32 adr, u32 i, char * txt)
      sprintf(txt, "STR%s %s, [%s, -#%X]", Condition[CONDITION(i)], Registre[REG_POS(i,12)], Registre[REG_POS(i,16)], (int)(i&0x7FF));
 return txt;}
 
+static char * OP_STREX(u32 adr, u32 i, char * txt)
+{
+     sprintf(txt, "STREX%s %s, %s, [%s]", Condition[CONDITION(i)], Registre[REG_POS(i,12)], Registre[REG_POS(i,0)], Registre[REG_POS(i,16)]);
+return txt;}
+
 static char * OP_STR_P_LSL_IMM_OFF(u32 adr, u32 i, char * txt)
 {
      LDRSTR_LSL_IMM(STR, "", "", "]");
@@ -2736,6 +2743,7 @@ return txt;}
 
 //-----------------------LDRBT-------------------------------------
 
+#if 0
 static char * OP_LDRBT_P_IMM_OFF_POSTIND(u32 adr, u32 i, char * txt)
 {
      sprintf(txt, "LDRBT%s %s, [%s], #%X!", Condition[CONDITION(i)], Registre[REG_POS(i,12)], Registre[REG_POS(i,16)], (int)(i&0x7FF));
@@ -2837,6 +2845,7 @@ static char * OP_STRBT_M_ROR_IMM_OFF_POSTIND(u32 adr, u32 i, char * txt)
 {
      LDRSTR_ROR_IMM(STRBT, "-", "]", "");
 return txt;}
+#endif
 
 //---------------------LDM-----------------------------
 
@@ -3754,19 +3763,20 @@ static char * OP_BL_10(u32 adr, u32 i, char * txt)
 
 }
 
-static char * OP_BL_THUMB(u32 adr, u32 i, char * txt)
+static char * OP_BL_11(u32 adr, u32 i, char * txt)
 {
      sprintf(txt, "BL #%X", (int)(part + ((i&0x7FF)<<1))&0xFFFFFFFC);
      return txt;
 } 
 
-#define TYPE_RETOUR char *
-#define PARAMETRES  u32 adr, u32 i, char * txt
-#define CALLTYPE     
-#define NOM_TAB     des_arm_instructions_set
-#define NOM_THUMB_TAB     des_thumb_instructions_set
+
+
 #define TABDECL(x) x
 
+const DisasmOpFunc des_arm_instructions_set[4096] = {
 #include "instruction_tabdef.inc"
-#include "thumb_tabdef.inc"
+};
 
+const DisasmOpFunc des_thumb_instructions_set[1024] = {
+#include "thumb_tabdef.inc"
+};

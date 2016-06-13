@@ -1,5 +1,5 @@
-//taken from ndstool
-//http://devkitpro.cvs.sourceforge.net/viewvc/devkitpro/tools/nds/ndstool/source/encryption.cpp?revision=1.2
+//taken from ndstool and modified trivially
+//http://devkitpro.svn.sourceforge.net/viewvc/devkitpro/trunk/tools/nds/ndstool/source/encryption.cpp?revision=1565
 
 /* decrypt.cpp - this file is part of DeSmuME
  *
@@ -21,16 +21,16 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#include <stdio.h>
+#include "decrypt.h"
+
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../types.h"
 #include "crc.h"
 #include "header.h"
-#include "decrypt.h"
 
-const unsigned char encr_data[] =
+//encr_data
+const unsigned char arm7_key[] =
 {
 	0x99,0xD5,0x20,0x5F,0x57,0x44,0xF5,0xB9,0x6E,0x19,0xA4,0xD9,0x9E,0x6A,0x5A,0x94,
 	0xD8,0xAE,0xF1,0xEB,0x41,0x75,0xE2,0x3A,0x93,0x82,0xD0,0x32,0x33,0xEE,0x31,0xD5,
@@ -396,7 +396,7 @@ static void init2(u32 *magic, u32 a[3])
 
 static void init1(u32 cardheader_gamecode)
 {
-	memcpy(card_hash, &encr_data, 4*(1024 + 18));
+	memcpy(card_hash, &arm7_key, 4*(1024 + 18));
 	arg2[0] = *(u32 *)&cardheader_gamecode;
 	arg2[1] = (*(u32 *)&cardheader_gamecode) >> 1;
 	arg2[2] = (*(u32 *)&cardheader_gamecode) << 1;
@@ -420,7 +420,7 @@ static void init0(u32 cardheader_gamecode)
 /*
  * decrypt_arm9
  */
-static void decrypt_arm9(u32 cardheader_gamecode, unsigned char *data)
+static bool decrypt_arm9(u32 cardheader_gamecode, unsigned char *data)
 {
 	u32 *p = (u32*)data;
 
@@ -434,7 +434,7 @@ static void decrypt_arm9(u32 cardheader_gamecode, unsigned char *data)
 	if (p[0] != MAGIC30 || p[1] != MAGIC34)
 	{
 		fprintf(stderr, "Decryption failed!\n");
-		exit(1);
+		return false;
 	}
 
 	*p++ = 0xE7FFDEFF;
@@ -446,24 +446,54 @@ static void decrypt_arm9(u32 cardheader_gamecode, unsigned char *data)
 		p += 2;
 		size -= 8;
 	}
+
+	return true;
 }
 
+static void encrypt_arm9(u32 cardheader_gamecode, unsigned char *data)
+{
+	u32 *p = (u32*)data;
+	if (p[0] != 0xE7FFDEFF || p[1] != 0xE7FFDEFF)
+	{
+		fprintf(stderr, "Encryption failed!\n");
+		return;
+	}
+	p += 2;
 
-bool DecryptSecureArea(u8 *romdata, long romlen)
+	init1(cardheader_gamecode);
+
+	arg2[1] <<= 1;
+	arg2[2] >>= 1;
+	
+	init2(card_hash, arg2);
+
+	u32 size = 0x800 - 8;
+	while (size > 0)
+	{
+		encrypt(card_hash, p+1, p);
+		p += 2;
+		size -= 8;
+	}
+
+	p = (u32*)data;
+	p[0] = MAGIC30;
+	p[1] = MAGIC34;
+	encrypt(card_hash, p+1, p);
+	init1(cardheader_gamecode);
+	encrypt(card_hash, p+1, p);
+}
+
+//the NDS contains 
+//0x0000 - 0x01FF : header
+//0x0200 - 0x3FFF : typically, nothing is stored here. on retail cards, you can't read from that area anyway, but im not sure if that's done in the game card or the GC bus controller on the system
+//0x4000 - 0x7FFF : secure area (details in gbatek)
+
+bool DecryptSecureArea(u8 *romheader, u8 *secure)
 {
 	//this looks like it will only work on little endian hosts
-	Header* header = (Header*)romdata;
+	Header* header = (Header*)romheader;
 
-	int romType = DetectRomType(*header,(char*)romdata);
-
-	/*bool do_decrypt = (endecrypt_option == 'd');
-	bool do_encrypt = (endecrypt_option == 'e') || (endecrypt_option == 'E');
-	unsigned int rounds_offsets = (endecrypt_option == 'E') ? 0x2000 : 0x1600;
-	unsigned int sbox_offsets = (endecrypt_option == 'E') ? 0x2400 : 0x2800;*/
-#if 0
-	unsigned int rounds_offsets = 0x1600;
-	unsigned int sbox_offsets = 0x2800;
-#endif
+	int romType = DetectRomType(*header, (char*)secure);
 
 	if(romType == ROMTYPE_INVALID)
 		return false;
@@ -475,25 +505,16 @@ bool DecryptSecureArea(u8 *romdata, long romlen)
 	}
 	else if (romType >= ROMTYPE_ENCRSECURE)		// includes ROMTYPE_MASKROM
 	{
-		unsigned char data[0x4000];
-		memcpy(data,romdata+0x4000,0x4000);
+		//unsigned char data[0x4000];
+		//memcpy(data,romdata+0x4000,0x4000);
+		//decrypt_arm9(*(u32 *)header->gamecode, data);
+		//// clear data after header
+		//memset(romdata+0x200,0,(0x4000-0x200));
+		//// write secure 0x800
+		//memcpy(romdata+0x4000,data,0x800);
 
-		decrypt_arm9(*(u32 *)header->gamecode, data);
-
-		// clear data after header
-		//fseek(fNDS, 0x200, SEEK_SET);
-		//for (unsigned int i=0x200; i<0x4000; i++) fputc(0, fNDS);
-		memset(romdata+0x200,0,(0x4000-0x200));
-
-		// write secure 0x800
-		//fseek(fNDS, 0x4000, SEEK_SET);
-		//fwrite(data, 1, 0x800, fNDS);
-		memcpy(romdata+0x4000,data,0x800);
-
-		// write header
-		//(already poked directly)
-		//fseek(fNDS, 0, SEEK_SET);
-		//fwrite(&header, 512, 1, fNDS);
+		if (!decrypt_arm9(*(u32 *)header->gamecode, secure))
+			return false;
 
 		printf("Decrypted.\n");
 	}
@@ -503,4 +524,41 @@ bool DecryptSecureArea(u8 *romdata, long romlen)
 	}
 
 	return true;
+}
+
+bool EncryptSecureArea(u8 *romheader, u8 *secure)
+{
+	//this looks like it will only work on little endian hosts
+	Header* header = (Header*)romheader;
+
+	int romType = DetectRomType(*header, (char*)secure);
+
+	if(romType == ROMTYPE_INVALID)
+		return false;
+
+	if (romType == ROMTYPE_NDSDUMPED)
+	{
+		//unsigned char data[0x4000];
+		//memcpy(data,romdata+0x4000,0x4000);
+		//encrypt_arm9(*(u32 *)header->gamecode, data);
+		//// clear data after header
+		//memset(romdata+0x200,0,(0x4000-0x200));
+		//// write secure 0x800
+		//memcpy(romdata+0x4000,data,0x800);
+
+		encrypt_arm9(*(u32 *)header->gamecode, secure);
+
+		printf("Encrypted.\n");
+	}
+
+	return true;
+}
+
+bool CheckValidRom(u8 *header, u8 *secure)
+{
+	Header* hdr = (Header*)header;
+
+	int romType = DetectRomType(*hdr, (char*)secure);
+
+	return (romType != ROMTYPE_INVALID);
 }

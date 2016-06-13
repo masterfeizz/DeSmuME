@@ -1,20 +1,19 @@
-/*  Copyright 2007 Guillaume Duhamel
+/*
+	Copyright 2007 Guillaume Duhamel
+	Copyright 2007-2012 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "ROMReader.h"
@@ -70,16 +69,14 @@ ROMReader_struct STDROMReader =
 
 void * STDROMReaderInit(const char * filename)
 {
-#ifdef WIN32
-	struct _stat sb;
-#else
+#ifndef _MSC_VER
 	struct stat sb;
-#endif
 	if (stat(filename, &sb) == -1)
 		return 0;
 
  	if ((sb.st_mode & S_IFMT) != S_IFREG)
 		return 0;
+#endif
 
 	return (void *) fopen(filename, "rb");
 }
@@ -140,7 +137,7 @@ void * GZIPROMReaderInit(const char * filename)
 
 void GZIPROMReaderDeInit(void * file)
 {
-	gzclose(file);
+	gzclose((gzFile)file);
 }
 
 u32 GZIPROMReaderSize(void * file)
@@ -150,22 +147,22 @@ u32 GZIPROMReaderSize(void * file)
 
 	/* FIXME this function should first save the current
 	 * position and restore it after size calculation */
-	gzrewind(file);
-	while (gzeof (file) == 0)
-		size += gzread(file, useless, 1024);
-	gzrewind(file);
+	gzrewind((gzFile)file);
+	while (gzeof ((gzFile)file) == 0)
+		size += gzread((gzFile)file, useless, 1024);
+	gzrewind((gzFile)file);
 
 	return size;
 }
 
 int GZIPROMReaderSeek(void * file, int offset, int whence)
 {
-	return gzseek(file, offset, whence);
+	return gzseek((gzFile)file, offset, whence);
 }
 
 int GZIPROMReaderRead(void * file, void * buffer, u32 size)
 {
-	return gzread(file, buffer, size);
+	return gzread((gzFile)file, buffer, size);
 }
 #endif
 

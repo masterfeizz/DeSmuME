@@ -1,0 +1,1 @@
+./makerom -f cia -o desmume.cia -elf DeSmuME.elf -rsf cia.rsf -banner banner.bnr -icon icon.icn -exefslogo -target t

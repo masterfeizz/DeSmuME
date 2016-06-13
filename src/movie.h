@@ -1,15 +1,35 @@
+/*
+	Copyright 2008-2015 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #ifndef __MOVIE_H_
 #define __MOVIE_H_
 
 #include <vector>
 #include <map>
 #include <string>
-#include <ostream>
-#include <istream>
 #include <stdlib.h>
+#include <time.h>
 
+#include "utils/datetime.h"
 #include "utils/guid.h"
 #include "utils/md5.h"
+
+struct UserInput;
+class EMUFILE;
 
 typedef struct
 {
@@ -27,14 +47,17 @@ typedef struct
 
 enum EMOVIEMODE
 {
-	MOVIEMODE_INACTIVE = 1,
-	MOVIEMODE_RECORD = 2,
-	MOVIEMODE_PLAY = 4,
+	MOVIEMODE_INACTIVE = 0,
+	MOVIEMODE_RECORD = 1,
+	MOVIEMODE_PLAY = 2,
+	MOVIEMODE_FINISHED = 3,
 };
 
 enum EMOVIECMD
 {
+	MOVIECMD_MIC = 1,
 	MOVIECMD_RESET = 2,
+	MOVIECMD_LID = 4,
 };
 
 //RLDUTSBAYXWEG
@@ -58,10 +81,10 @@ public:
 	//misc commands like reset, etc.
 	//small now to save space; we might need to support more commands later.
 	//the disk format will support up to 64bit if necessary
-	uint8 commands;
-	bool command_reset() { return (commands&MOVIECMD_RESET)!=0; }
-	bool command_microphone() { return (commands&1)!=0; }
-	bool command_lid() { return (commands&4)!=0; }
+	u8 commands;
+	bool command_reset() const { return (commands&MOVIECMD_RESET)!=0; }
+	bool command_microphone() const { return (commands&MOVIECMD_MIC)!=0; }
+	bool command_lid() const { return (commands&MOVIECMD_LID)!=0; }
 
 	void toggleBit(int bit)
 	{
@@ -89,14 +112,15 @@ public:
 		return (pad & mask(bit))!=0;
 	}
 
+	bool Compare(MovieRecord& compareRec);
 	void clear();
 	
-	void parse(MovieData* md, std::istream* is);
-	bool parseBinary(MovieData* md, std::istream* is);
-	void dump(MovieData* md, std::ostream* os, int index);
-	void dumpBinary(MovieData* md, std::ostream* os, int index);
-	void parsePad(std::istream* is, u16& pad);
-	void dumpPad(std::ostream* os, u16 pad);
+	void parse(EMUFILE* fp);
+	bool parseBinary(EMUFILE* fp);
+	void dump(EMUFILE* fp);
+	void dumpBinary(EMUFILE* fp);
+	void parsePad(EMUFILE* fp, u16& pad);
+	void dumpPad(EMUFILE* fp, u16 pad);
 	
 	static const char mnemonics[13];
 
@@ -118,13 +142,15 @@ public:
 	u32 romChecksum;
 	std::string romSerial;
 	std::string romFilename;
-	std::vector<char> savestate;
-	std::vector<char> sram;
+	std::vector<u8> savestate;
+	std::vector<u8> sram;
 	std::vector<MovieRecord> records;
 	std::vector<std::wstring> comments;
 	
 	int rerecordCount;
 	Desmume_Guid guid;
+
+	DateTime rtcStart;
 
 	//was the frame data stored in binary?
 	bool binaryFlag;
@@ -161,15 +187,14 @@ public:
 
 	void truncateAt(int frame);
 	void installValue(std::string& key, std::string& val);
-	int dump(std::ostream* os, bool binary);
+	int dump(EMUFILE* fp, bool binary);
 	void clearRecordRange(int start, int len);
 	void insertEmpty(int at, int frames);
 	
-	static bool loadSavestateFrom(std::vector<char>* buf);
-	static void dumpSavestateTo(std::vector<char>* buf, int compressionLevel);
+	static bool loadSavestateFrom(std::vector<u8>* buf);
+	static void dumpSavestateTo(std::vector<u8>* buf, int compressionLevel);
 
-	static bool loadSramFrom(std::vector<char>* buf);
-	static void dumpSramTo(std::vector<char>* buf, std::string sramfname);
+	static bool loadSramFrom(std::vector<u8>* buf);
 	//void TryDumpIncremental();
 
 private:
@@ -189,20 +214,24 @@ extern EMOVIEMODE movieMode;		//adelikat: main needs this for frame counter disp
 extern MovieData currMovieData;		//adelikat: main needs this for frame counter display
 
 extern bool movie_reset_command;
-extern bool movie_lid;
 
-bool FCEUI_MovieGetInfo(std::istream* fp, MOVIE_INFO& info, bool skipFrameCount);
-void _CDECL_ FCEUI_SaveMovie(const char *fname, std::wstring author, int flag, std::string sramfname);
-void _CDECL_ FCEUI_LoadMovie(const char *fname, bool _read_only, bool tasedit, int _pauseframe);
+bool FCEUI_MovieGetInfo(EMUFILE* fp, MOVIE_INFO& info, bool skipFrameCount);
+void FCEUI_SaveMovie(const char *fname, std::wstring author, int flag, std::string sramfname, const DateTime &rtcstart);
+const char* _CDECL_ FCEUI_LoadMovie(const char *fname, bool _read_only, bool tasedit, int _pauseframe); // returns NULL on success, errmsg on failure
 void FCEUI_StopMovie();
 void FCEUMOV_AddInputState();
-void NDS_setTouchFromMovie(void);
-void mov_savestate(std::ostream* os);
-bool mov_loadstate(std::istream* is, int size);
-void LoadFM2_binarychunk(MovieData& movieData, std::istream* fp, int size);
-bool LoadFM2(MovieData& movieData, std::istream* fp, int size, bool stopAfterHeader);
+void FCEUMOV_HandlePlayback();
+void FCEUMOV_HandleRecording();
+void mov_savestate(EMUFILE* fp);
+bool mov_loadstate(EMUFILE* fp, int size);
+void LoadFM2_binarychunk(MovieData& movieData, EMUFILE* fp, int size);
+bool LoadFM2(MovieData& movieData, EMUFILE* fp, int size, bool stopAfterHeader);
 extern bool movie_readonly;
 extern bool ShowInputDisplay;
-extern int MicButtonPressed;
 void FCEUI_MakeBackupMovie(bool dispMessage);
+DateTime FCEUI_MovieGetRTCDefault();
+void BinaryDataFromString(std::string &inStringData, std::vector<u8> *outBinaryData);
+void ReplayRecToDesmumeInput(const MovieRecord &theRecord, UserInput *theInput);
+void DesmumeInputToReplayRec(const UserInput &theInput, MovieRecord *theRecord);
+
 #endif

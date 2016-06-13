@@ -1,27 +1,32 @@
-///*  This file is part of DeSmuME, derived from several files in Snes9x 1.51 which are 
-//    licensed under the terms supplied at the end of this file (for the terms are very long!)
-//    Differences from that baseline version are:
-//
-//    Copyright (C) 2009 DeSmuME team
-//
-//    DeSmuME is free software; you can redistribute it and/or modify
-//    it under the terms of the GNU General Public License as published by
-//    the Free Software Foundation; either version 2 of the License, or
-//    (at your option) any later version.
-//
-//    DeSmuME is distributed in the hope that it will be useful,
-//    but WITHOUT ANY WARRANTY; without even the implied warranty of
-//    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//    GNU General Public License for more details.
-//
-//    You should have received a copy of the GNU General Public License
-//    along with DeSmuME; if not, write to the Free Software
-//    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-//*/
+/*
+	This file is part of DeSmuME, derived from several files in Snes9x 1.51 which are 
+	licensed under the terms supplied at the end of this file (for the terms are very long!)
+	Differences from that baseline version are:
+
+	Copyright (C) 2008-2010 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 
 #ifndef INPUTDX_INCLUDED
 #define INPUTDX_INCLUDED
+
+#include <windows.h>
+#define DIRECTINPUT_VERSION 0x0800
+#include "directx/dinput.h"
+#include "directx/xinput.h"
 
 typedef struct
 {
@@ -37,6 +42,7 @@ InputCust * GetInputCustom(HWND hwnd);
 #define CUSTKEY_ALT_MASK   0x01
 #define CUSTKEY_CTRL_MASK  0x02
 #define CUSTKEY_SHIFT_MASK 0x04
+#define CUSTKEY_NONE_MASK  0x08
 
 struct SJoypad {
     BOOL Enabled;
@@ -77,13 +83,22 @@ struct SJoypad {
 
 
 struct SJoyState{
+	LPDIRECTINPUTDEVICE8 Device;
     bool Attached;
-    //JOYCAPS Caps;
+    JOYCAPS Caps;
     int Threshold;
     bool Left;
     bool Right;
     bool Up;
     bool Down;
+    
+	bool XRotMax;
+    bool XRotMin;
+    bool YRotMax;
+    bool YRotMin;
+    bool ZRotMax;
+    bool ZRotMin;
+
     bool PovLeft;
     bool PovRight;
     bool PovUp;
@@ -98,9 +113,11 @@ struct SJoyState{
     bool UDown;
     bool VUp;
     bool VDown;
-    bool ZUp;
-    bool ZDown;
-    bool Button[32];
+    bool ZPos;
+    bool ZNeg;
+    bool Button[128];
+	bool FeedBack;
+	LPDIRECTINPUTEFFECT     pEffect;
 };
 
 extern SJoypad Joypad[16];
@@ -110,7 +127,34 @@ extern SJoypad TurboToggleJoypadStorage[8];
 
 void RunInputConfig();
 void RunHotkeyConfig();
+void input_acquire();
 void input_process();
+void LoadHotkeyConfig();
+void input_init();
+void input_deinit();
+
+struct SGuitar {
+    BOOL Enabled;
+    WORD GREEN;
+    WORD RED;
+    WORD YELLOW;
+    WORD BLUE;
+};
+
+struct SPiano {
+    BOOL Enabled;
+    WORD C,CS,D,DS,E,F,FS,G,GS,A,AS,B,HIC;
+};
+
+struct SPaddle {
+    BOOL Enabled;
+    WORD DEC;
+    WORD INC;
+};
+
+extern SGuitar Guitar;
+extern SPiano Piano;
+extern SPaddle Paddle;
 
 #endif
 

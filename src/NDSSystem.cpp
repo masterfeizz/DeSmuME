@@ -1,25 +1,21 @@
-/*	Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com 
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2008-2016 DeSmuME team
 
-	Copyright (C) 2008-2009 DeSmuME team
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    This file is part of DeSmuME
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 
 #include <string.h>
 #include <stdlib.h>
@@ -27,26 +23,55 @@
 #include <math.h>
 #include <zlib.h>
 
-#include "common.h"
-#include "NDSSystem.h"
-#include "render3D.h"
-#include "MMU.h"
-#ifndef EXPERIMENTAL_GBASLOT
-#include "cflash.h"
-#endif
-#include "ROMReader.h"
-#include "gfx3d.h"
 #include "utils/decrypt/decrypt.h"
 #include "utils/decrypt/crc.h"
+#include "utils/decrypt/header.h"
+#include "utils/advanscene.h"
+#include "utils/task.h"
+
+#include "common.h"
+#include "armcpu.h"
+#include "render3D.h"
+#include "MMU.h"
+#include "NDSSystem.h"
+#include "gfx3d.h"
+#include "GPU.h"
+#include "cp15.h"
 #include "bios.h"
 #include "debug.h"
 #include "cheatSystem.h"
 #include "movie.h"
 #include "Disassembler.h"
+#include "FIFO.h"
+#include "readwrite.h"
+#include "registers.h"
+#include "debug.h"
+#include "driver.h"
+#include "firmware.h"
+#include "version.h"
+#include "path.h"
+#include "slot1.h"
+#include "slot2.h"
+#include "SPU.h"
+#include "wifi.h"
 
-#ifdef _WIN32
-#include "./windows/disView.h"
+#ifdef GDB_STUB
+#include "gdbstub.h"
 #endif
+
+//int xxctr=0;
+//#define LOG_ARM9
+//#define LOG_ARM7
+//#define dolog (currFrameCounter>30)
+bool dolog = false;
+//#define LOG_TO_FILE
+//#define LOG_TO_FILE_REGS
+
+//===============================================================
+FILE *fp_dis7 = NULL;
+FILE *fp_dis9 = NULL;
+
+PathInfo path;
 
 TCommonSettings CommonSettings;
 static BaseDriver _stub_driver;
@@ -55,567 +80,160 @@ std::string InputDisplayString;
 
 static BOOL LidClosed = FALSE;
 static u8	countLid = 0;
-char pathToROM[MAX_PATH];
-char pathFilenameToROMwithoutExt[MAX_PATH];
 
 GameInfo gameInfo;
-
-/* the count of bytes copied from the firmware into memory */
-#define NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT 0x70
-
-BOOL fw_success = FALSE;
-
 NDSSystem nds;
+CFIRMWARE	*firmware = NULL;
 
+using std::min;
+using std::max;
+
+bool singleStep;
+bool nds_debug_continuing[2];
 int lagframecounter;
 int LagFrameFlag;
 int lastLag;
 int TotalLagFrames;
 
-/* ------------------------------------------------------------------------- */
-/* FIRMWARE DECRYPTION */
+TSCalInfo TSCal;
 
-static u32 keyBuf[0x412];
-static u32 keyCode[3];
-
-#define DWNUM(i) ((i) >> 2)
-
-static u32 bswap32(u32 val)
+namespace DLDI
 {
-	return (((val & 0x000000FF) << 24) | ((val & 0x0000FF00) << 8) | ((val & 0x00FF0000) >> 8) | ((val & 0xFF000000) >> 24));
+	bool tryPatch(void* data, size_t size, unsigned int device);
 }
 
-static BOOL getKeyBuf()
+void Desmume_InitOnce()
 {
-	int dummy;
-	FILE *file = fopen(CommonSettings.ARM7BIOS, "rb");
-
-	if(file == NULL)
-		return FALSE;
-
-	fseek(file, 0x30, SEEK_SET);
-	dummy = fread(keyBuf, 0x412, 4, file);
-
-	fclose(file);
-	return TRUE;
-}
-
-static void crypt64BitUp(u32 *ptr)
-{
-	u32 Y = ptr[0];
-	u32 X = ptr[1];
-
-	for(u32 i = 0x00; i <= 0x0F; i++)
-	{
-		u32 Z = (keyBuf[i] ^ X);
-		X = keyBuf[DWNUM(0x048 + (((Z >> 24) & 0xFF) << 2))];
-		X = (keyBuf[DWNUM(0x448 + (((Z >> 16) & 0xFF) << 2))] + X);
-		X = (keyBuf[DWNUM(0x848 + (((Z >> 8) & 0xFF) << 2))] ^ X);
-		X = (keyBuf[DWNUM(0xC48 + ((Z & 0xFF) << 2))] + X);
-		X = (Y ^ X);
-		Y = Z;
-	}
-
-	ptr[0] = (X ^ keyBuf[DWNUM(0x40)]);
-	ptr[1] = (Y ^ keyBuf[DWNUM(0x44)]);
-}
-
-static void crypt64BitDown(u32 *ptr)
-{
-	u32 Y = ptr[0];
-	u32 X = ptr[1];
-
-	for(u32 i = 0x11; i >= 0x02; i--)
-	{
-		u32 Z = (keyBuf[i] ^ X);
-		X = keyBuf[DWNUM(0x048 + (((Z >> 24) & 0xFF) << 2))];
-		X = (keyBuf[DWNUM(0x448 + (((Z >> 16) & 0xFF) << 2))] + X);
-		X = (keyBuf[DWNUM(0x848 + (((Z >> 8) & 0xFF) << 2))] ^ X);
-		X = (keyBuf[DWNUM(0xC48 + ((Z & 0xFF) << 2))] + X);
-		X = (Y ^ X);
-		Y = Z;
-	}
-
-	ptr[0] = (X ^ keyBuf[DWNUM(0x04)]);
-	ptr[1] = (Y ^ keyBuf[DWNUM(0x00)]);
-}
-
-static void applyKeycode(u32 modulo)
-{
-	crypt64BitUp(&keyCode[1]);
-	crypt64BitUp(&keyCode[0]);
-
-	u32 scratch[2] = {0x00000000, 0x00000000};
-
-	for(u32 i = 0; i <= 0x44; i += 4)
-	{
-		keyBuf[DWNUM(i)] = (keyBuf[DWNUM(i)] ^ bswap32(keyCode[DWNUM(i % modulo)]));
-	}
-
-	for(u32 i = 0; i <= 0x1040; i += 8)
-	{
-		crypt64BitUp(scratch);
-		keyBuf[DWNUM(i)] = scratch[1];
-		keyBuf[DWNUM(i+4)] = scratch[0];
-	}
-}
-
-static BOOL initKeycode(u32 idCode, int level, u32 modulo)
-{
-	if(getKeyBuf() == FALSE)
-		return FALSE;
-
-	keyCode[0] = idCode;
-	keyCode[1] = (idCode >> 1);
-	keyCode[2] = (idCode << 1);
-
-	if(level >= 1) applyKeycode(modulo);
-	if(level >= 2) applyKeycode(modulo);
-
-	keyCode[1] <<= 1;
-	keyCode[2] >>= 1;
-
-	if(level >= 3) applyKeycode(modulo);
-
-	return TRUE;
-}
-
-static u16 getBootCodeCRC16()
-{
-	unsigned int i, j;
-	u32 crc = 0xFFFF;
-	const u16 val[8] = {0xC0C1, 0xC181, 0xC301, 0xC601, 0xCC01, 0xD801, 0xF001, 0xA001};
-
-	for(i = 0; i < nds.FW_ARM9BootCodeSize; i++)
-	{
-		crc = (crc ^ nds.FW_ARM9BootCode[i]);
-
-		for(j = 0; j < 8; j++) 
-		{
-			if(crc & 0x0001)
-				crc = ((crc >> 1) ^ (val[j] << (7-j)));
-			else
-				crc =  (crc >> 1);
-		}
-	}
-
-	for(i = 0; i < nds.FW_ARM7BootCodeSize; i++)
-	{
-		crc = (crc ^ nds.FW_ARM7BootCode[i]);
-
-		for(j = 0; j < 8; j++) 
-		{
-			if(crc & 0x0001)
-				crc = ((crc >> 1) ^ (val[j] << (7-j)));
-			else
-				crc =  (crc >> 1);
-		}
-	}
-
-	return (crc & 0xFFFF);
-}
-
-static u32 * decryptFirmwareBlock(const char *blockName, u32 *src, u32 &size)
-{
-	u32 curBlock[2];
-	u32 *dst;
-	u32 i, j;
-	u32 xIn = 4, xOut = 0;
-	u32 len;
-	u32 offset;
-	u32 windowOffset;
-	u32 xLen;
-	u8 d;
-	u16 data;
-
-	memcpy(curBlock, src, 8);
-	crypt64BitDown(curBlock);
-
-	u32 blockSize = (curBlock[0] >> 8);
-	size = blockSize;
-
-	INFO("Firmware: %s final size: %i bytes\n", blockName, blockSize);
-
-	dst = (u32*)new u8[blockSize];
-
-	xLen = blockSize;
-
-	while(xLen > 0)
-	{
-		d = T1ReadByte((u8*)curBlock, (xIn % 8));
-		xIn++;
-		if((xIn % 8) == 0)
-		{
-			memcpy(curBlock, (((u8*)src) + xIn), 8);
-			crypt64BitDown(curBlock);
-		}
-
-		for(i = 0; i < 8; i++)
-		{
-			if(d & 0x80)
-			{
-				data = (T1ReadByte((u8*)curBlock, (xIn % 8)) << 8);
-				xIn++;
-				if((xIn % 8) == 0)
-				{
-					memcpy(curBlock, (((u8*)src) + xIn), 8);
-					crypt64BitDown(curBlock);
-				}
-				data |= T1ReadByte((u8*)curBlock, (xIn % 8));
-				xIn++;
-				if((xIn % 8) == 0)
-				{
-					memcpy(curBlock, (((u8*)src) + xIn), 8);
-					crypt64BitDown(curBlock);
-				}
-
-				len = (data >> 12) + 3;
-				offset = (data & 0xFFF);
-				windowOffset = (xOut - offset - 1);
-
-				for(j = 0; j < len; j++)
-				{
-					T1WriteByte((u8*)dst, xOut, T1ReadByte((u8*)dst, windowOffset));
-					xOut++;
-					windowOffset++;
-
-					xLen--;
-					if(xLen == 0)
-						goto lz77End;
-				}
-			}
-			else
-			{
-				T1WriteByte((u8*)dst, xOut, T1ReadByte((u8*)curBlock, (xIn % 8)));
-				xOut++;
-				xIn++;
-				if((xIn % 8) == 0)
-				{
-					memcpy(curBlock, (((u8*)src) + xIn), 8);
-					crypt64BitDown(curBlock);
-				}
-
-				xLen--;
-				if(xLen == 0)
-					goto lz77End;
-			}
-
-			d = ((d << 1) & 0xFF);
-		}
-	}
-
-lz77End:
-
-	return dst;
-}
-
-static BOOL decryptFirmware(u8 *data)
-{
-	u16 shifts;
-	u16 shift1, shift2, shift3, shift4;
-	u32 part1addr, part2addr, part3addr, part4addr, part5addr;
-	u32 part1ram, part2ram;
-
-	shifts = T1ReadWord(data, 0x14);
-	shift1 = (shifts & 0x7);
-	shift2 = ((shifts >> 3) & 0x7);
-	shift3 = ((shifts >> 6) & 0x7);
-	shift4 = ((shifts >> 9) & 0x7);
-
-	part1addr = T1ReadWord(data, 0x0C);
-	part1addr = (part1addr << (2+shift1));
-
-	INFO("Firmware: ARM9 boot code address: %05X\n", part1addr);
-
-	part1ram = T1ReadWord(data, 0x0E);
-	part1ram = (0x02800000 - (part1ram << (2+shift2)));
-
-	INFO("Firmware: ARM9 boot code RAM address: %08X\n", part1ram);
-
-	part2addr = T1ReadWord(data, 0x10);
-	part2addr = (part2addr << (2+shift3));
-
-	INFO("Firmware: ARM7 boot code address: %05X\n", part2addr);
-
-	part2ram = T1ReadWord(data, 0x12);
-	part2ram = (0x03810000 - (part2ram << (2+shift4)));
-
-	INFO("Firmware: ARM7 boot code RAM address: %08X\n", part2ram);
-
-	part3addr = T1ReadWord(data, 0x00);
-	part3addr = (part3addr << 3);
-
-	INFO("Firmware: ARM9 GUI code address: %05X\n", part3addr);
-
-	part4addr = T1ReadWord(data, 0x02);
-	part4addr = (part4addr << 3);
-
-	INFO("Firmware: ARM7 GUI code address: %05X\n", part4addr);
-
-	part5addr = T1ReadWord(data, 0x16);
-	part5addr = (part5addr << 3);
-
-	INFO("Firmware: data/gfx address: %05X\n", part5addr);
-
-	if(initKeycode(T1ReadLong(data, 0x08), 1, 0xC) == FALSE) return FALSE;
-	crypt64BitDown((u32*)&data[0x18]);
-	if(initKeycode(T1ReadLong(data, 0x08), 2, 0xC) == FALSE) return FALSE;
-
-	nds.FW_ARM9BootCode = (u8*)decryptFirmwareBlock("ARM9 boot code", (u32*)&data[part1addr], nds.FW_ARM9BootCodeSize);
-	nds.FW_ARM7BootCode = (u8*)decryptFirmwareBlock("ARM7 boot code", (u32*)&data[part2addr], nds.FW_ARM7BootCodeSize);
-
-	nds.FW_ARM9BootCodeAddr = part1ram;
-	nds.FW_ARM7BootCodeAddr = part2ram;
-
-	u16 crc16_header = T1ReadWord(data, 0x06);
-	u16 crc16_mine = getBootCodeCRC16();
-	if(crc16_header != crc16_mine)
-	{
-		INFO("Firmware: error: the boot code CRC16 (%04X) doesn't match the value in the firmware header (%04X).\n", 
-			crc16_mine, crc16_header);
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
-/* ------------------------------------------------------------------------- */
-
-static u32
-calc_CRC16( u32 start, const u8 *data, int count) {
-	int i,j;
-	u32 crc = start & 0xffff;
-	const u16 val[8] = { 0xC0C1,0xC181,0xC301,0xC601,0xCC01,0xD801,0xF001,0xA001 };
-	for(i = 0; i < count; i++)
-	{
-		crc = crc ^ data[i];
-
-		for(j = 0; j < 8; j++) {
-			int do_bit = 0;
-
-			if ( crc & 0x1)
-				do_bit = 1;
-
-			crc = crc >> 1;
-
-			if ( do_bit) {
-				crc = crc ^ (val[j] << (7-j));
-			}
-		}
-	}
-	return crc;
-}
-
-static int
-copy_firmware_user_data( u8 *dest_buffer, const u8 *fw_data) {
-	/*
-	* Determine which of the two user settings in the firmware is the current
-	* and valid one and then copy this into the destination buffer.
-	*
-	* The current setting will have a greater count.
-	* Settings are only valid if its CRC16 is correct.
-	*/
-	int user1_valid = 0;
-	int user2_valid = 0;
-	u32 user_settings_offset;
-	u32 fw_crc;
-	u32 crc;
-	int copy_good = 0;
-
-	user_settings_offset = fw_data[0x20];
-	user_settings_offset |= fw_data[0x21] << 8;
-	user_settings_offset <<= 3;
-
-	if ( user_settings_offset <= 0x3FE00) {
-		s32 copy_settings_offset = -1;
-
-		crc = calc_CRC16( 0xffff, &fw_data[user_settings_offset],
-			NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT);
-		fw_crc = fw_data[user_settings_offset + 0x72];
-		fw_crc |= fw_data[user_settings_offset + 0x73] << 8;
-		if ( crc == fw_crc) {
-			user1_valid = 1;
-		}
-
-		crc = calc_CRC16( 0xffff, &fw_data[user_settings_offset + 0x100],
-			NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT);
-		fw_crc = fw_data[user_settings_offset + 0x100 + 0x72];
-		fw_crc |= fw_data[user_settings_offset + 0x100 + 0x73] << 8;
-		if ( crc == fw_crc) {
-			user2_valid = 1;
-		}
-
-		if ( user1_valid) {
-			if ( user2_valid) {
-				u16 count1, count2;
-
-				count1 = fw_data[user_settings_offset + 0x70];
-				count1 |= fw_data[user_settings_offset + 0x71] << 8;
-
-				count2 = fw_data[user_settings_offset + 0x100 + 0x70];
-				count2 |= fw_data[user_settings_offset + 0x100 + 0x71] << 8;
-
-				if ( count2 > count1) {
-					copy_settings_offset = user_settings_offset + 0x100;
-				}
-				else {
-					copy_settings_offset = user_settings_offset;
-				}
-			}
-			else {
-				copy_settings_offset = user_settings_offset;
-			}
-		}
-		else if ( user2_valid) {
-			/* copy the second user settings */
-			copy_settings_offset = user_settings_offset + 0x100;
-		}
-
-		if ( copy_settings_offset > 0) {
-			memcpy( dest_buffer, &fw_data[copy_settings_offset],
-				NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT);
-			copy_good = 1;
-		}
-	}
-
-	return copy_good;
-}
-
-
-#ifdef GDB_STUB
-int NDS_Init( struct armcpu_memory_iface *arm9_mem_if,
-struct armcpu_ctrl_iface **arm9_ctrl_iface,
-struct armcpu_memory_iface *arm7_mem_if,
-struct armcpu_ctrl_iface **arm7_ctrl_iface) {
-#else
-int NDS_Init( void) {
+	static bool initOnce = false;
+	if(initOnce) return;
+	initOnce = true;
+
+#ifdef HAVE_LIBAGG
+	extern void Agg_init(); //no need to include just for this
+	Agg_init();
 #endif
-	nds.ARM9Cycle = 0;
-	nds.ARM7Cycle = 0;
-	nds.cycles = 0;
+}
+
+int NDS_GetCPUCoreCount()
+{
+	return getOnlineCores();
+}
+
+void NDS_SetupDefaultFirmware()
+{
+	NDS_FillDefaultFirmwareConfigData(&CommonSettings.fw_config);
+}
+
+void NDS_RunAdvansceneAutoImport()
+{
+	if(CommonSettings.run_advanscene_import != "")
+	{
+		std::string fname = CommonSettings.run_advanscene_import;
+		std::string fname_out = fname + ".ddb";
+		EMUFILE_FILE outf(fname_out,"wb");
+		u32 ret = advsc.convertDB(fname.c_str(),&outf);
+		if(ret == 0)
+			exit(0);
+		else exit(1);
+	}
+}
+
+int NDS_Init()
+{
 	nds.idleFrameCounter = 0;
 	memset(nds.runCycleCollector,0,sizeof(nds.runCycleCollector));
 	MMU_Init();
-	nds.nextHBlank = 3168;
-	nds.VCount = 0;
-	nds.lignerendu = FALSE;
 
-	nds.sleeping = FALSE;
+	//got to print this somewhere..
+	printf("%s\n", EMU_DESMUME_NAME_AND_VERSION());
+	
+	{
+		char	buf[MAX_PATH];
+		memset(buf, 0, MAX_PATH);
+		strcpy(buf, path.pathToModule);
+		strcat(buf, "desmume.ddb");							// DeSmuME database	:)
+		advsc.setDatabase(buf);
 
-	if (Screen_Init(GFXCORE_DUMMY) != 0)
-		return -1;
-
-	gfx3d_init();
-
-#ifdef GDB_STUB
-	armcpu_new(&NDS_ARM7,1, arm7_mem_if, arm7_ctrl_iface);
-	armcpu_new(&NDS_ARM9,0, arm9_mem_if, arm9_ctrl_iface);
-#else
-	armcpu_new(&NDS_ARM7,1);
+		//why is this done here? shitty engineering. not intended.
+		NDS_RunAdvansceneAutoImport();
+	}
+	
 	armcpu_new(&NDS_ARM9,0);
-#endif
-
+	NDS_ARM9.SetBaseMemoryInterface(&arm9_base_memory_iface);
+	NDS_ARM9.SetBaseMemoryInterfaceData(NULL);
+	NDS_ARM9.ResetMemoryInterfaceToBase();
+	
+	armcpu_new(&NDS_ARM7,1);
+	NDS_ARM7.SetBaseMemoryInterface(&arm7_base_memory_iface);
+	NDS_ARM7.SetBaseMemoryInterfaceData(NULL);
+	NDS_ARM7.ResetMemoryInterfaceToBase();
+	
+	if (GPU != NULL)
+	{
+		GPU->FinalizeAndDeallocate();
+	}
+	
+	GPU = GPUSubsystem::Allocate();
+	
 	if (SPU_Init(SNDCORE_DUMMY, 740) != 0)
 		return -1;
 
-#ifdef EXPERIMENTAL_WIFI
-	WIFI_Init(&wifiMac) ;
-	WIFI_SoftAP_Init(&wifiMac);
-#endif
+	WIFI_Init() ;
 
-	nds.FW_ARM9BootCode = NULL;
-	nds.FW_ARM7BootCode = NULL;
+	cheats = new CHEATS();
+	cheatSearch = new CHEATSEARCH();
 
 	return 0;
 }
 
-void NDS_DeInit(void) {
-	if(MMU.CART_ROM != MMU.UNUSED_RAM)
-		NDS_FreeROM();
-
-	nds.nextHBlank = 3168;
+void NDS_DeInit(void)
+{
+	gameInfo.closeROM();
 	SPU_DeInit();
-	Screen_DeInit();
+	
+	GPU->FinalizeAndDeallocate();
+	GPU = NULL;
+	
 	MMU_DeInit();
-	gpu3D->NDS_3D_Close();
+	WIFI_DeInit();
+	
+	delete cheats;
+	cheats = NULL;
+	
+	delete cheatSearch;
+	cheatSearch = NULL;
 
-#ifdef EXPERIMENTAL_WIFI
-	WIFI_SoftAP_Shutdown(&wifiMac);
+#ifdef HAVE_JIT
+	arm_jit_close();
 #endif
-	cheatsSearchClose();
+
+#ifdef LOG_ARM7
+	if (fp_dis7 != NULL) 
+	{
+		fclose(fp_dis7);
+		fp_dis7 = NULL;
+	}
+#endif
+
+#ifdef LOG_ARM9
+	if (fp_dis9 != NULL) 
+	{
+		fclose(fp_dis9);
+		fp_dis9 = NULL;
+	}
+#endif
 }
 
-BOOL NDS_SetROM(u8 * rom, u32 mask)
+NDS_header* NDS_getROMHeader(void)
 {
-	MMU_setRom(rom, mask);
-
-	return TRUE;
+	NDS_header *newHeader = new NDS_header;
+	memcpy(newHeader, &gameInfo.header, sizeof(NDS_header));
+	
+	return newHeader;
 } 
 
-NDS_header * NDS_getROMHeader(void)
-{
-	NDS_header * header = new NDS_header;
 
-	memcpy(header->gameTile, MMU.CART_ROM, 12);
-	memcpy(header->gameCode, MMU.CART_ROM + 12, 4);
-	header->makerCode = T1ReadWord(MMU.CART_ROM, 16);
-	header->unitCode = MMU.CART_ROM[18];
-	header->deviceCode = MMU.CART_ROM[19];
-	header->cardSize = MMU.CART_ROM[20];
-	memcpy(header->cardInfo, MMU.CART_ROM + 21, 8);
-	header->flags = MMU.CART_ROM[29];
-	header->ARM9src = T1ReadLong(MMU.CART_ROM, 32);
-	header->ARM9exe = T1ReadLong(MMU.CART_ROM, 36);
-	header->ARM9cpy = T1ReadLong(MMU.CART_ROM, 40);
-	header->ARM9binSize = T1ReadLong(MMU.CART_ROM, 44);
-	header->ARM7src = T1ReadLong(MMU.CART_ROM, 48);
-	header->ARM7exe = T1ReadLong(MMU.CART_ROM, 52);
-	header->ARM7cpy = T1ReadLong(MMU.CART_ROM, 56);
-	header->ARM7binSize = T1ReadLong(MMU.CART_ROM, 60);
-	header->FNameTblOff = T1ReadLong(MMU.CART_ROM, 64);
-	header->FNameTblSize = T1ReadLong(MMU.CART_ROM, 68);
-	header->FATOff = T1ReadLong(MMU.CART_ROM, 72);
-	header->FATSize = T1ReadLong(MMU.CART_ROM, 76);
-	header->ARM9OverlayOff = T1ReadLong(MMU.CART_ROM, 80);
-	header->ARM9OverlaySize = T1ReadLong(MMU.CART_ROM, 84);
-	header->ARM7OverlayOff = T1ReadLong(MMU.CART_ROM, 88);
-	header->ARM7OverlaySize = T1ReadLong(MMU.CART_ROM, 92);
-	header->unknown2a = T1ReadLong(MMU.CART_ROM, 96);
-	header->unknown2b = T1ReadLong(MMU.CART_ROM, 100);
-	header->IconOff = T1ReadLong(MMU.CART_ROM, 104);
-	header->CRC16 = T1ReadWord(MMU.CART_ROM, 108);
-	header->ROMtimeout = T1ReadWord(MMU.CART_ROM, 110);
-	header->ARM9unk = T1ReadLong(MMU.CART_ROM, 112);
-	header->ARM7unk = T1ReadLong(MMU.CART_ROM, 116);
-	memcpy(header->unknown3c, MMU.CART_ROM + 120, 8);
-	header->ROMSize = T1ReadLong(MMU.CART_ROM, 128);
-	header->HeaderSize = T1ReadLong(MMU.CART_ROM, 132);
-	memcpy(header->unknown5, MMU.CART_ROM + 136, 56);
-	memcpy(header->logo, MMU.CART_ROM + 192, 156);
-	header->logoCRC16 = T1ReadWord(MMU.CART_ROM, 348);
-	header->headerCRC16 = T1ReadWord(MMU.CART_ROM, 350);
-	memcpy(header->reserved, MMU.CART_ROM + 352, 160);
 
-	return header;
-} 
-
-void NDS_setTouchPos(u16 x, u16 y)
-{
-	nds.touchX = (x <<4);
-	nds.touchY = (y <<4);
-	nds.isTouch = 1;
-
-	MMU.ARM7_REG[0x136] &= 0xBF;
-}
-
-void NDS_releaseTouch(void)
-{ 
-	nds.touchX = 0;
-	nds.touchY = 0;
-	nds.isTouch = 0;
-
-	MMU.ARM7_REG[0x136] |= 0x40;
-}
 
 void debug()
 {
@@ -649,13 +267,6 @@ void debug()
 	//if((NDS_ARM9.R[15]>>28)) emu_halt();
 }
 
-#define DSGBA_LOADER_SIZE 512
-enum
-{
-	ROM_NDS = 0,
-	ROM_DSGBA
-};
-
 #if 0 /* not used */
 //http://www.aggregate.org/MAGIC/#Population%20Count%20(Ones%20Count)
 static u32 ones32(u32 x)
@@ -673,1787 +284,1754 @@ static u32 ones32(u32 x)
 }
 #endif
 
+RomBanner::RomBanner(bool defaultInit)
+{
+	if(!defaultInit) return;
+	version = 1; //Version  (0001h)
+	crc16 = 0; //CRC16 across entries 020h..83Fh
+	memset(reserved,0,sizeof(reserved));
+	memset(bitmap,0,sizeof(bitmap));
+	memset(palette,0,sizeof(palette));
+	memset(titles,0,sizeof(titles));
+	memset(end0xFF,0,sizeof(end0xFF));
+}
+
+bool GameInfo::hasRomBanner()
+{
+	if(header.IconOff + sizeof(RomBanner) > romsize)
+		return false;
+	else return true;
+}
+
+const RomBanner& GameInfo::getRomBanner()
+{
+	return banner;
+}
+
+bool GameInfo::ValidateHeader()
+{
+	bool isRomValid = false;
+	
+	// Validate the ROM type.
+	int detectedRomType = DetectRomType(*(Header *)&header, (char *)secureArea);
+	if (detectedRomType == ROMTYPE_INVALID)
+	{
+		printf("ROM Validation: Invalid ROM type detected.\n");
+		return isRomValid;
+	}
+	
+	// Ensure that the game title and game code are both clean ASCII, but also
+	// make an exception for homebrew ROMs, which may not always have clean
+	// headers to begin with.
+	if (detectedRomType != ROMTYPE_HOMEBREW)
+	{
+		for (size_t i = 0; i < 12; i++)
+		{
+			char c = (char)header.gameTile[i];
+			if (c < 0 || (c > 0 && c < 32) || c == 127)
+			{
+				printf("ROM Validation: Invalid character detected in ROM Title.\n");
+				printf("                charIndex = %d, charValue = %d\n", (int)i, c);
+				return isRomValid;
+			}
+		}
+		
+		for (size_t i = 0; i < 4; i++)
+		{
+			char c = (char)header.gameCode[i];
+			if (c < 0 || (c > 0 && c < 32) || c == 127)
+			{
+				printf("ROM Validation: Invalid character detected in ROM Game Code.\n");
+				printf("                charIndex = %d, charValue = %d\n", (int)i, c);
+				return isRomValid;
+			}
+		}
+	}
+	
+	isRomValid = true;
+	return isRomValid;
+}
+
 void GameInfo::populate()
 {
-	NDS_header * _header = NDS_getROMHeader();
-	header = *_header;
-	delete _header;
+	const char regions_index[] = "JPFSEODIRKHXVWUC";
+	const char *regions[] = {
+					"???",
+					"JPN",		// J
+					"EUR",		// P
+					"FRA",		// F
+					"ESP",		// S
+					"USA",		// E
+					"INT",		// O
+					"NOE",		// D
+					"ITA",		// I
+					"RUS",		// R
+					"KOR",		// K
+					"HOL",		// H
+					"EUU",		// X
+					"EUU",		// V
+					"EUU",		// W
+					"AUS",		// U
+					"CHN",		// C
 
-	if (
-		// ??? in all Homebrews game title have is 2E0000EA
-		//(
-		//(header->gameTile[0] == 0x2E) && 
-		//(header->gameTile[1] == 0x00) && 
-		//(header->gameTile[2] == 0x00) && 
-		//(header->gameTile[3] == 0xEA)
-		//) &&
-		(
-			((header.gameCode[0] == 0x23) && 
-			(header.gameCode[1] == 0x23) && 
-			(header.gameCode[2] == 0x23) && 
-			(header.gameCode[3] == 0x23)
-			) || 
-			(header.gameCode[0] == 0x00) 
-		)
-		&&
-			header.makerCode == 0x0
-		)
+	};
+	
+	memset(ROMserial, 0, sizeof(ROMserial));
+	memset(ROMname, 0, sizeof(ROMname));
+
+	if(isHomebrew())
 	{
-		memset(ROMserial, 0, sizeof(ROMserial));
+		//we can't really make a serial for a homebrew game that hasnt set a game code
 		strcpy(ROMserial, "Homebrew");
 	}
 	else
 	{
-		memset(ROMserial, '_', sizeof(ROMserial));
-		memcpy(ROMserial, header.gameTile, strlen(header.gameTile) < 12 ? strlen(header.gameTile) : 12);
-		memcpy(ROMserial+12+1, header.gameCode, 4);
-		memcpy(ROMserial+12+1+4, &header.makerCode, 2);
-		memset(ROMserial+19, '\0', 1);
+		if (isDSiEnhanced())
+			strcpy(ROMserial,"TWL-    -");
+		else
+			strcpy(ROMserial,"NTR-    -");
+		memcpy(ROMserial+4, header.gameCode, 4);
+
+		u32 regions_num = ARRAY_SIZE(regions);
+		u32 region = (u32)(std::max<s32>(strchr(regions_index,header.gameCode[3]) - regions_index + 1, 0));
+
+		if (region < regions_num)
+			strcat(ROMserial, regions[region]);
+		else
+			strcat(ROMserial, "???");
 	}
+
+	//rom name is probably set even in homebrew, so do it regardless
+	memset(ROMname, 0, sizeof(ROMname));
+	memcpy(ROMname, header.gameTile, 12);
+	trim(ROMname,20);
+
+		/*if(header.IconOff < romsize)
+		{
+			u8 num = (T1ReadByte((u8*)romdata, header.IconOff) == 1)?6:7;
+			for (int i = 0; i < num; i++)
+			{
+				wcstombs(ROMfullName[i], (wchar_t *)(romdata+header.IconOff+0x240+(i*0x100)), 0x100);
+				trim(ROMfullName[i]);
+			}
+		}*/
 }
 
-#ifdef EXPERIMENTAL_GBASLOT
-int NDS_LoadROM( const char *filename)
-#else
-int NDS_LoadROM( const char *filename,
-				const char *cflash_disk_image_file)
-#endif
+bool GameInfo::loadROM(std::string fname, u32 type)
 {
-	int					ret;
-	int					type;
-	ROMReader_struct	*reader;
-	void				*file;
-	u32					size, mask;
-	u8					*data;
-	char				*noext;
-	char				buf[MAX_PATH];
-	char				extROM[MAX_PATH];
-	char				extROM2[5];
+	//printf("ROM %s\n", CommonSettings.loadToMemory?"loaded to RAM":"stream from disk");
+
+	closeROM();
+
+	char *noext = strdup(fname.c_str());
+	reader = ROMReaderInit(&noext); free(noext);
+	fROM = reader->Init(fname.c_str());
+	if (!fROM) return false;
+
+	headerOffset = (type == ROM_DSGBA)?DSGBA_LOADER_SIZE:0;
+	romsize = reader->Size(fROM) - headerOffset;
+	reader->Seek(fROM, headerOffset, SEEK_SET);
+
+	bool res = (reader->Read(fROM, &header, sizeof(header)) == sizeof(header));
+
+	if (res)
+	{
+#ifndef LOCAL_LE
+		//endian swap necessary fields. It would be better if we made accessors for these. I wonder if you could make a macro for a field accessor that would take the bitsize and do the swap on the fly
+		struct FieldSwap {
+			const size_t offset;
+			const size_t bytes;
+		};
+		
+		static const FieldSwap fieldSwaps[] = {
+			{ offsetof(NDS_header,makerCode), 2},
+			
+			{ offsetof(NDS_header,ARM9src), 4},
+			{ offsetof(NDS_header,ARM9exe), 4},
+			{ offsetof(NDS_header,ARM9cpy), 4},
+			{ offsetof(NDS_header,ARM9binSize), 4},
+			{ offsetof(NDS_header,ARM7src), 4},
+			{ offsetof(NDS_header,ARM7exe), 4},
+			{ offsetof(NDS_header,ARM7cpy), 4},
+			{ offsetof(NDS_header,ARM7binSize), 4},
+			{ offsetof(NDS_header,FNameTblOff), 4},
+			{ offsetof(NDS_header,FNameTblSize), 4},
+			{ offsetof(NDS_header,FATOff), 4},
+			{ offsetof(NDS_header,FATSize), 4},
+			{ offsetof(NDS_header,ARM9OverlayOff), 4},
+			{ offsetof(NDS_header,ARM9OverlaySize), 4},
+			{ offsetof(NDS_header,ARM7OverlayOff), 4},
+			{ offsetof(NDS_header,ARM7OverlaySize), 4},
+			{ offsetof(NDS_header,normalCmd), 4},
+			{ offsetof(NDS_header,Key1Cmd), 4},
+			{ offsetof(NDS_header,IconOff), 4},
+			
+			{ offsetof(NDS_header,CRC16), 2},
+			{ offsetof(NDS_header,ROMtimeout), 2},
+			
+			{ offsetof(NDS_header,ARM9autoload), 4},
+			{ offsetof(NDS_header,ARM7autoload), 4},
+			{ offsetof(NDS_header,endROMoffset), 4},
+			{ offsetof(NDS_header,HeaderSize), 4},
+			
+			{ offsetof(NDS_header, ARM9module), 4},
+			{ offsetof(NDS_header, ARM7module), 4},
+			
+			{ offsetof(NDS_header,logoCRC16), 2},
+			{ offsetof(NDS_header,headerCRC16), 2},
+		};
+		
+		for(size_t i = 0; i < ARRAY_SIZE(fieldSwaps); i++)
+		{
+			const u8 *fieldAddr = (u8 *)&header + fieldSwaps[i].offset;
+			
+			switch(fieldSwaps[i].bytes)
+			{
+				case 2:
+					*(u16 *)fieldAddr = LE_TO_LOCAL_16(*(u16 *)fieldAddr);
+					break;
+					
+				case 4:
+					*(u32 *)fieldAddr = LE_TO_LOCAL_32(*(u32 *)fieldAddr);
+					break;
+			}
+		}
+#endif
+		cardSize = (128 * 1024) << header.cardSize;
+
+		if (cardSize < romsize)
+		{
+			msgbox->warn("The ROM header is invalid.\nThe device size has been increased to allow for the provided file size.\n");
+			
+			for (u32 i = header.cardSize; i < 0xF; i++)
+			{
+				if (((128 * 1024) << i) >= romsize) 
+				{
+					header.cardSize = i;
+					cardSize = (128 * 1024) << i;
+					break;
+				}
+			}
+		}
+		
+		mask = (cardSize - 1);
+		mask |= (mask >>1);
+		mask |= (mask >>2);
+		mask |= (mask >>4);
+		mask |= (mask >>8);
+		mask |= (mask >>16);
+
+		if (type == ROM_NDS)
+		{
+			reader->Seek(fROM, 0x4000 + headerOffset, SEEK_SET);
+			reader->Read(fROM, &secureArea[0], 0x4000);
+		}
+
+		if (CommonSettings.loadToMemory)
+		{
+			reader->Seek(fROM, headerOffset, SEEK_SET);
+			
+			romdata = new u8[romsize + 4];
+			if (reader->Read(fROM, romdata, romsize) != romsize)
+			{
+				delete [] romdata; romdata = NULL;
+				romsize = 0;
+
+				return false;
+			}
+
+			if(hasRomBanner())
+			{
+				memcpy(&banner, romdata + header.IconOff, sizeof(RomBanner));
+				
+				banner.version = LE_TO_LOCAL_16(banner.version);
+				banner.crc16 = LE_TO_LOCAL_16(banner.crc16);
+				
+				for(size_t i = 0; i < ARRAY_SIZE(banner.palette); i++)
+				{
+					banner.palette[i] = LE_TO_LOCAL_16(banner.palette[i]);
+				}
+			}
+
+			_isDSiEnhanced = (LE_TO_LOCAL_32(*(u32*)(romdata + 0x180) == 0x8D898581U) && LE_TO_LOCAL_32(*(u32*)(romdata + 0x184) == 0x8C888480U));
+			reader->DeInit(fROM); fROM = NULL;
+			return true;
+		}
+		_isDSiEnhanced = ((readROM(0x180) == 0x8D898581U) && (readROM(0x184) == 0x8C888480U));
+		if (hasRomBanner())
+		{
+			reader->Seek(fROM, header.IconOff + headerOffset, SEEK_SET);
+			reader->Read(fROM, &banner, sizeof(RomBanner));
+			
+			banner.version = LE_TO_LOCAL_16(banner.version);
+			banner.crc16 = LE_TO_LOCAL_16(banner.crc16);
+			
+			for(size_t i = 0; i < ARRAY_SIZE(banner.palette); i++)
+			{
+				banner.palette[i] = LE_TO_LOCAL_16(banner.palette[i]);
+			}
+		}
+		reader->Seek(fROM, headerOffset, SEEK_SET);
+		lastReadPos = 0;
+		return true;
+	}
+
+	romsize = 0;
+	reader->DeInit(fROM); fROM = NULL;
+	return false;
+}
+
+void GameInfo::closeROM()
+{
+	if (fROM)
+		reader->DeInit(fROM);
+
+	if (romdata)
+		delete [] romdata;
+
+	fROM = NULL;
+	romdata = NULL;
+	romsize = 0;
+	lastReadPos = 0xFFFFFFFF;
+}
+
+u32 GameInfo::readROM(u32 pos)
+{
+	u32 num;
+	u32 data;
+	if (!romdata)
+	{
+		if (lastReadPos != pos)
+			reader->Seek(fROM, pos + headerOffset, SEEK_SET);
+		num = reader->Read(fROM, &data, 4);
+		lastReadPos = (pos + num);
+	}
+	else
+	{
+		if(pos + 4 <= romsize)
+		{
+			//fast path
+			data = LE_TO_LOCAL_32(*(u32*)(romdata + pos));
+			num = 4;
+		}
+		else
+		{
+			data = 0;
+			num = 0;
+			for(int i=0;i<4;i++)
+			{
+				if(pos >= romsize)
+					break;
+				data |= (romdata[pos]<<(i*8));
+				pos++;
+				num++;
+			}
+		}
+	}
+
+
+	//in case we didn't read enough data, pad the remainder with 0xFF
+	u32 pad = 0;
+	while(num<4)
+	{
+		pad >>= 8;
+		pad |= 0xFF000000;
+		num++;
+	}
+
+	return (LE_TO_LOCAL_32(data) & ~pad) | pad;
+}
+
+bool GameInfo::isDSiEnhanced()
+{
+	return _isDSiEnhanced;
+}
+
+bool GameInfo::isHomebrew()
+{
+	return ((header.ARM9src < 0x4000) && (T1ReadLong(header.logo, 0) != 0x51AEFF24) && (T1ReadLong(header.logo, 4) != 0x699AA221));
+}
+
+static int rom_init_path(const char *filename, const char *physicalName, const char *logicalFilename)
+{
+	u32	type = ROM_NDS;
+
+	path.init(logicalFilename? logicalFilename : filename);
+
+	if (!strcasecmp(path.extension().c_str(),"zip")
+		|| !strcasecmp(path.extension().c_str(),"gz")) {
+			type = ROM_NDS;
+			gameInfo.loadROM(path.path, type);
+	} else
+	if ( path.isdsgba(path.path)) {
+		type = ROM_DSGBA;
+		gameInfo.loadROM(path.path, type);
+	}
+	else if ( !strcasecmp(path.extension().c_str(), "nds")) {
+		type = ROM_NDS;
+		gameInfo.loadROM(physicalName ? physicalName : path.path, type); //n.b. this does nothing if the file can't be found (i.e. if it was an extracted tempfile)...
+		//...but since the data was extracted to gameInfo then it is ok
+	}
+	//ds.gba in archives, it's already been loaded into memory at this point
+	else if (logicalFilename && path.isdsgba(std::string(logicalFilename))) {
+		type = ROM_DSGBA;
+	} else {
+		//well, try to load it as an nds rom anyway
+		type = ROM_NDS;
+		gameInfo.loadROM(physicalName ? physicalName : path.path, type);
+	}
+
+	//check that size is at least the size of the header
+	if (gameInfo.romsize < 352) {
+		return -1;
+	}
+
+	gameInfo.romType = type;
+
+	return 1;
+}
+
+int NDS_LoadROM(const char *filename, const char *physicalName, const char *logicalFilename)
+{
+	int	ret;
+	char	buf[MAX_PATH];
 
 	if (filename == NULL)
 		return -1;
 
-	memset(pathToROM, 0, MAX_PATH);
-	memset(pathFilenameToROMwithoutExt, 0, MAX_PATH);
-	memset(extROM, 0, MAX_PATH);
-	memset(extROM2, 0, 5);
+	ret = rom_init_path(filename, physicalName, logicalFilename);
+	if (ret < 1)
+		return ret;
 
-	noext = strdup(filename);
-	reader = ROMReaderInit(&noext);
+	if (cheatSearch)
+		cheatSearch->close();
+	FCEUI_StopMovie();
 	
-	for (int t = strlen(filename); t>0; t--)
-		if ( (filename[t] == '\\') || (filename[t] == '/') )
-		{
-			strncpy(pathToROM, filename, t+1);
-			break;
-		}
+	if (!gameInfo.ValidateHeader())
+	{
+		ret = -1;
+		return ret;
+	}
 	
-	for (int t = strlen(filename); t>0; t--)
-		if ( (filename[t] == '\\') || (filename[t] == '/') || (filename[t] == '.') )
-		{
-			if (filename[t] != '.') return -1;
-			strncpy(pathFilenameToROMwithoutExt, filename, t);
-			strncpy(extROM, filename+t, strlen(filename) - t);
-			if (t>4)
-				strncpy(extROM2, filename+(t-3), 3);
-			break;
-		}
-
-	if(!strcasecmp(extROM, ".zip"))
-		type = ROM_NDS;
-	else if ( !strcasecmp(extROM, ".nds"))
-		type = ROM_NDS;
-	else if ( !strcasecmp(extROM, ".gba") && !strcasecmp(extROM2, ".ds")) 
-		type = ROM_DSGBA;
-	else
-		type = ROM_NDS;
-
-	file = reader->Init(filename);
-	if (!file)
-	{
-		reader->DeInit(file);
-		free(noext);
-		printf("C");
-		return -1;
-	}
-
-	size = reader->Size(file);
-
-	if(type == ROM_DSGBA)
-	{
-		reader->Seek(file, DSGBA_LOADER_SIZE, SEEK_SET);
-		size -= DSGBA_LOADER_SIZE;
-	}
-
-	//check that size is at least the size of the header
-	if (size < 352+160) {
-		reader->DeInit(file);
-		free(noext);
-		printf("D");
-		return -1;
-	}
-
-	//zero 25-dec-08 - this used to yield a mask which was 2x large
-	//mask = size; 
-	mask = size-1; 
-	mask |= (mask >>1);
-	mask |= (mask >>2);
-	mask |= (mask >>4);
-	mask |= (mask >>8);
-	mask |= (mask >>16);
-
-	// Make sure old ROM is freed first(at least this way we won't be eating
-	// up a ton of ram before the old ROM is freed)
-	if(MMU.CART_ROM != MMU.UNUSED_RAM)
-		NDS_FreeROM();
-
-	printf("Mask = %i\n", mask);
-	data = (u8*) malloc(mask + 1);
-	if (!data)
-	{
-		reader->DeInit(file);
-		free(noext);
-		printf("E");
-		return -1;
-	}
-
-	ret = reader->Read(file, data, size);
-	reader->DeInit(file);
-
-	//decrypt if necessary..
-	//but this is untested and suspected to fail on big endian, so lets not support this on big endian
-#ifndef WORDS_BIGENDIAN
-	bool okRom = DecryptSecureArea(data,size);
-
-	if(!okRom) {
-		printf("Specified file is not a valid rom\n");
-		return -1;
-	}
-#endif
-
-
-	cheatsSearchClose();
-	MMU_unsetRom();
-	NDS_SetROM(data, mask);
-	NDS_Reset();
-
-#ifndef EXPERIMENTAL_GBASLOT
-	cflash_close();
-	cflash_init(cflash_disk_image_file);
-#endif
-	free(noext);
-
-	memset(buf, 0, MAX_PATH);
-	strcpy(buf, pathFilenameToROMwithoutExt);
-	strcat(buf, ".dsv");							// DeSmuME memory card	:)
-
-	MMU_new.backupDevice.load_rom(buf);
-
-	memset(buf, 0, MAX_PATH);
-	strcpy(buf, pathFilenameToROMwithoutExt);
-	strcat(buf, ".dct");							// DeSmuME cheat		:)
-	cheatsInit(buf);
-
 	gameInfo.populate();
-	gameInfo.crc = crc32(0,data,size);
-	INFO("\nROM crc: %08X\n\n", gameInfo.crc);
-	INFO("\nROM serial: %s\n", gameInfo.ROMserial);
+	
+	if (CommonSettings.loadToMemory)
+		gameInfo.crc = crc32(0, (u8*)gameInfo.romdata, gameInfo.romsize);
+	else
+		gameInfo.crc = 0;
+
+	gameInfo.chipID  = 0xC2;														// The Manufacturer ID is defined by JEDEC (C2h = Macronix)
+	if (!gameInfo.isHomebrew())
+	{
+		gameInfo.chipID |= ((((128 << gameInfo.header.cardSize) / 1024) - 1) << 8);		// Chip size in megabytes minus 1
+																						// (07h = 8MB, 0Fh = 16MB, 1Fh = 32MB, 3Fh = 64MB, 7Fh = 128MB)
+
+		// flags
+		// 0: Unknown
+		// 1: Unknown
+		// 2: Unknown
+		// 3: Unknown
+		// 4: Unknown
+		// 5: DSi? (if set to 1 then DSi Enhanced games send command D6h to Slot1)
+		// 6: Unknown
+		// 7: ROM speed (Secure Area Block transfer mode (trasfer 8x200h or 1000h bytes)
+		// TODO:
+		//if (gameInfo.isDSiEnhanced())
+		//		gameInfo.chipID |= (0x40 << 24);
+		gameInfo.chipID |= (0x00 << 24);
+	}
+
+	INFO("\nROM game code: %c%c%c%c\n", gameInfo.header.gameCode[0], gameInfo.header.gameCode[1], gameInfo.header.gameCode[2], gameInfo.header.gameCode[3]);
+	if (gameInfo.crc)
+		INFO("ROM crc: %08X\n", gameInfo.crc);
+	if (!gameInfo.isHomebrew())
+	{
+		INFO("ROM serial: %s\n", gameInfo.ROMserial);
+		INFO("ROM chipID: %08X\n", gameInfo.chipID);
+		INFO("ROM internal name: %s\n", gameInfo.ROMname);
+		if (gameInfo.isDSiEnhanced()) INFO("ROM DSi Enhanced\n");
+	}
+	INFO("ROM developer: %s\n", ((gameInfo.header.makerCode == 0) && gameInfo.isHomebrew())?"Homebrew":getDeveloperNameByID(gameInfo.header.makerCode).c_str());
+
+	buf[0] = gameInfo.header.gameCode[0];
+	buf[1] = gameInfo.header.gameCode[1];
+	buf[2] = gameInfo.header.gameCode[2];
+	buf[3] = gameInfo.header.gameCode[3];
+	buf[4] = 0;
+	if (advsc.checkDB(buf, gameInfo.crc))
+	{
+		u8 sv = advsc.getSaveType();
+		printf("Found in game database by %s:\n", advsc.getIdMethod());
+		printf("\t* ROM serial:\t\t%s\n", advsc.getSerial());
+		printf("\t* ROM save type:\t");
+		if (sv == 0xFF)
+			printf("Unknown");
+		else
+			if (sv == 0xFE)
+				printf("None");
+			else
+			{
+				printf("%s", save_types[sv + 1].descr);
+				if (CommonSettings.autodetectBackupMethod == 1)
+					backup_setManualBackupType(sv + 1);
+			}
+		printf("\n\t* ROM crc:\t\t%08X\n", advsc.getCRC32());
+	}
+	printf("\n");
+
+	//for homebrew, try auto-patching DLDI. should be benign if there is no DLDI or if it fails
+	if(gameInfo.isHomebrew())
+	{
+		if(!CommonSettings.loadToMemory)
+			msgbox->warn("Sorry.. right now, you can't use the default (stream rom from disk) with homebrew due to a bug with DLDI-autopatching");
+		if (slot1_GetCurrentType() == NDS_SLOT1_R4)
+			DLDI::tryPatch((void*)gameInfo.romdata, gameInfo.romsize, 1);
+		else
+			if (slot2_GetCurrentType() == NDS_SLOT2_CFLASH)
+				DLDI::tryPatch((void*)gameInfo.romdata, gameInfo.romsize, 0);
+
+	}
+
+	if (cheats != NULL)
+	{
+		memset(buf, 0, MAX_PATH);
+		path.getpathnoext(path.CHEATS, buf);
+		strcat(buf, ".dct");						// DeSmuME cheat		:)
+		cheats->init(buf);
+	}
+
+	NDS_Reset();
 
 	return ret;
 }
 
 void NDS_FreeROM(void)
 {
-	if (MMU.CART_ROM != MMU.UNUSED_RAM)
-		delete [] MMU.CART_ROM;
-	MMU_unsetRom();
-	if (MMU.bupmem.fp)
-		fclose(MMU.bupmem.fp);
-	MMU.bupmem.fp = NULL;
-}
-
-bool _HACK_DONT_STOPMOVIE = false;
-void NDS_Reset()
-{
-	unsigned int i;
-	u32 src;
-	u32 dst;
-	FILE* inf = 0;
-	NDS_header * header = NDS_getROMHeader();
-
-	if (!header) return ;
-
-	if(movieMode != MOVIEMODE_INACTIVE && !_HACK_DONT_STOPMOVIE)
-		movie_reset_command = true;
-
-	MMU_clearMem();
-	MMU_new.backupDevice.reset();
-
-	//ARM7 BIOS IRQ HANDLER
-	if(CommonSettings.UseExtBIOS == true)
-		inf = fopen(CommonSettings.ARM7BIOS,"rb");
-	else
-		inf = NULL;
-
-	if(inf) {
-		fread(MMU.ARM7_BIOS,1,16384,inf);
-		fclose(inf);
-		if(CommonSettings.SWIFromBIOS == true) NDS_ARM7.swi_tab = 0;
-		else NDS_ARM7.swi_tab = ARM7_swi_tab;
-		INFO("ARM7 BIOS is loaded.\n");
-	} else {
-		NDS_ARM7.swi_tab = ARM7_swi_tab;
-		_MMU_write32<ARMCPU_ARM7>(0x00, 0xE25EF002);
-		_MMU_write32<ARMCPU_ARM7>(0x04, 0xEAFFFFFE);
-		_MMU_write32<ARMCPU_ARM7>(0x18, 0xEA000000);
-		_MMU_write32<ARMCPU_ARM7>(0x20, 0xE92D500F);
-		_MMU_write32<ARMCPU_ARM7>(0x24, 0xE3A00301);
-		_MMU_write32<ARMCPU_ARM7>(0x28, 0xE28FE000);
-		_MMU_write32<ARMCPU_ARM7>(0x2C, 0xE510F004);
-		_MMU_write32<ARMCPU_ARM7>(0x30, 0xE8BD500F);
-		_MMU_write32<ARMCPU_ARM7>(0x34, 0xE25EF004);
-	}
-
-	//ARM9 BIOS IRQ HANDLER
-	if(CommonSettings.UseExtBIOS == true)
-		inf = fopen(CommonSettings.ARM9BIOS,"rb");
-	else
-		inf = NULL;
-	//memcpy(ARM9Mem.ARM9_BIOS + 0x20, gba_header_data_0x04, 156);
-
-	if(inf) {
-		fread(ARM9Mem.ARM9_BIOS,1,4096,inf);
-		fclose(inf);
-		if(CommonSettings.SWIFromBIOS == true) NDS_ARM9.swi_tab = 0;
-		else NDS_ARM9.swi_tab = ARM9_swi_tab;
-		INFO("ARM9 BIOS is loaded.\n");
-	} else {
-		NDS_ARM9.swi_tab = ARM9_swi_tab;
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0018, 0xEA000000);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0020, 0xE92D500F);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0024, 0xEE190F11);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0028, 0xE1A00620);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF002C, 0xE1A00600);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0030, 0xE2800C40);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0034, 0xE28FE000);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0038, 0xE510F004);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF003C, 0xE8BD500F);
-		_MMU_write32<ARMCPU_ARM9>(0xFFFF0040, 0xE25EF004);
-	}
-
-	/* Is it really needed ??? */
-	_MMU_write32<ARMCPU_ARM9>(0x0000004, 0xE3A0010E);
-	_MMU_write32<ARMCPU_ARM9>(0x0000008, 0xE3A01020);
-	// _MMU_write32<ARMCPU_ARM9>(0x000000C, 0xE1B02110);
-	_MMU_write32<ARMCPU_ARM9>(0x000000C, 0xE1B02040);
-	_MMU_write32<ARMCPU_ARM9>(0x0000010, 0xE3B02020);
-	// _MMU_write32<ARMCPU_ARM9>(0x0000010, 0xE2100202);
-
-	if(CommonSettings.UseExtFirmware == true)
-		NDS_LoadFirmware(CommonSettings.Firmware);
-
-	if((CommonSettings.UseExtBIOS == true) && (CommonSettings.UseExtFirmware == true) && (CommonSettings.BootFromFirmware == true) && (fw_success == TRUE))
-	{
-		for(i = 0; i < nds.FW_ARM9BootCodeSize; i += 4)
-		{
-			_MMU_write32<ARMCPU_ARM9>((nds.FW_ARM9BootCodeAddr + i), T1ReadLong(nds.FW_ARM9BootCode, i));
-		}
-
-		for(i = 0; i < nds.FW_ARM7BootCodeSize; i += 4)
-		{
-			_MMU_write32<ARMCPU_ARM7>((nds.FW_ARM7BootCodeAddr + i), T1ReadLong(nds.FW_ARM7BootCode, i));
-		}
-
-		armcpu_init(&NDS_ARM9, nds.FW_ARM9BootCodeAddr);
-		armcpu_init(&NDS_ARM7, nds.FW_ARM7BootCodeAddr);
-		//armcpu_init(&NDS_ARM9, 0xFFFF0000);
-		//armcpu_init(&NDS_ARM7, 0x00000000);
-	}
-	else
-	{
-		src = header->ARM9src;
-		dst = header->ARM9cpy;
-
-		for(i = 0; i < (header->ARM9binSize>>2); ++i)
-		{
-			_MMU_write32<ARMCPU_ARM9>(dst, T1ReadLong(MMU.CART_ROM, src));
-			dst += 4;
-			src += 4;
-		}
-
-		src = header->ARM7src;
-		dst = header->ARM7cpy;
-
-		for(i = 0; i < (header->ARM7binSize>>2); ++i)
-		{
-			_MMU_write32<ARMCPU_ARM7>(dst, T1ReadLong(MMU.CART_ROM, src));
-			dst += 4;
-			src += 4;
-		}
-
-		armcpu_init(&NDS_ARM7, header->ARM7exe);
-		armcpu_init(&NDS_ARM9, header->ARM9exe);
-	}
-	
-	nds.ARM9Cycle = 0;
-	nds.ARM7Cycle = 0;
-	nds.wifiCycle = 0;
-	nds.cycles = 0;
-	memset(nds.timerCycle, 0, sizeof(s32) * 2 * 4);
-	memset(nds.timerOver, 0, sizeof(BOOL) * 2 * 4);
-	nds.nextHBlank = 3168;
-	nds.VCount = 0;
-	nds.old = 0;
-	nds.diff = 0;
-	nds.lignerendu = FALSE;
-	nds.touchX = nds.touchY = 0;
-	nds.isTouch = 0;
-	nds.debugConsole = CommonSettings.DebugConsole;
-	SetupMMU(nds.debugConsole);
-
-	_MMU_write16<ARMCPU_ARM9>(0x04000130, 0x3FF);
-	_MMU_write16<ARMCPU_ARM7>(0x04000130, 0x3FF);
-	_MMU_write08<ARMCPU_ARM7>(0x04000136, 0x43);
-
-	LidClosed = FALSE;
-	countLid = 0;
-
-	/*
-	* Setup a copy of the firmware user settings in memory.
-	* (this is what the DS firmware would do).
-	*/
-	{
-		u8 temp_buffer[NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT];
-		int fw_index;
-
-		if ( copy_firmware_user_data( temp_buffer, MMU.fw.data)) {
-			for ( fw_index = 0; fw_index < NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT; fw_index++)
-				_MMU_write08<ARMCPU_ARM9>(0x027FFC80 + fw_index, temp_buffer[fw_index]);
-		}
-	}
-
-	// Copy the whole header to Main RAM 0x27FFE00 on startup.
-	//  Reference: http://nocash.emubase.de/gbatek.htm#dscartridgeheader
-	for (i = 0; i < ((0x170+0x90)/4); i++) {
-		_MMU_write32<ARMCPU_ARM9>(0x027FFE00+i*4, LE_TO_LOCAL_32(((u32*)MMU.CART_ROM)[i]));
-	}
-
-	// Write the header checksum to memory (the firmware needs it to see the cart)
-	_MMU_write16<ARMCPU_ARM9>(0x027FF808, T1ReadWord(MMU.CART_ROM, 0x15E));
-
-	MainScreen.offset = 0;
-	SubScreen.offset = 192;
-
-	//_MMU_write32[ARMCPU_ARM9](0x02007FFC, 0xE92D4030);
-
-	delete header;
-
-	Screen_Reset();
-	gfx3d_reset();
-	gpu3D->NDS_3D_Reset();
-	SPU_Reset();
-
-#ifdef EXPERIMENTAL_WIFI
-	WIFI_Init(&wifiMac);
-
-	WIFI_SoftAP_Shutdown(&wifiMac);
-	WIFI_SoftAP_Init(&wifiMac);
-#endif
-
-	memcpy(FW_Mac, (MMU.fw.data + 0x36), 6);
-}
-
-int NDS_ImportSave(const char *filename)
-{
-	if (strlen(filename) < 4)
-		return 0;
-
-	if (memcmp(filename+strlen(filename)-4, ".duc", 4) == 0)
-		return MMU_new.backupDevice.load_duc(filename);
-	else
-		return MMU_new.backupDevice.load_raw(filename);
-
-	return 0;
-}
-
-bool NDS_ExportSave(const char *filename)
-{
-	if (strlen(filename) < 4)
-		return false;
-
-	if (memcmp(filename+strlen(filename)-4, ".sav", 4) == 0)
-		return MMU_new.backupDevice.save_raw(filename);
-
-	return false;
-}
-
-static int WritePNGChunk(FILE *fp, uint32 size, const char *type, const uint8 *data)
-{
-	uint32 crc;
-
-	uint8 tempo[4];
-
-	tempo[0]=size>>24;
-	tempo[1]=size>>16;
-	tempo[2]=size>>8;
-	tempo[3]=size;
-
-	if(fwrite(tempo,4,1,fp)!=1)
-		return 0;
-	if(fwrite(type,4,1,fp)!=1)
-		return 0;
-
-	if(size)
-		if(fwrite(data,1,size,fp)!=size)
-			return 0;
-
-	crc = crc32(0,(uint8 *)type,4);
-	if(size)
-		crc = crc32(crc,data,size);
-
-	tempo[0]=crc>>24;
-	tempo[1]=crc>>16;
-	tempo[2]=crc>>8;
-	tempo[3]=crc;
-
-	if(fwrite(tempo,4,1,fp)!=1)
-		return 0;
-	return 1;
-}
-int NDS_WritePNG(const char *fname)
-{
-	int x, y;
-	int width=256;
-	int height=192*2;
-	u16 * bmp = (u16 *)GPU_tempScreen;
-	FILE *pp=NULL;
-	uint8 *compmem = NULL;
-	uLongf compmemsize = (uLongf)( (height * (width + 1) * 3 * 1.001 + 1) + 12 );
-
-	if(!(compmem=(uint8 *)malloc(compmemsize)))
-		return 0;
-
-	if(!(pp=fopen(fname, "wb")))
-	{
-		return 0;
-	}
-	{
-		static uint8 header[8]={137,80,78,71,13,10,26,10};
-		if(fwrite(header,8,1,pp)!=1)
-			goto PNGerr;
-	}
-
-	{
-		uint8 chunko[13];
-
-		chunko[0] = width >> 24;		// Width
-		chunko[1] = width >> 16;
-		chunko[2] = width >> 8;
-		chunko[3] = width;
-
-		chunko[4] = height >> 24;		// Height
-		chunko[5] = height >> 16;
-		chunko[6] = height >> 8;
-		chunko[7] = height;
-
-		chunko[8]=8;				// 8 bits per sample(24 bits per pixel)
-		chunko[9]=2;				// Color type; RGB triplet
-		chunko[10]=0;				// compression: deflate
-		chunko[11]=0;				// Basic adapative filter set(though none are used).
-		chunko[12]=0;				// No interlace.
-
-		if(!WritePNGChunk(pp,13,"IHDR",chunko))
-			goto PNGerr;
-	}
-
-	{
-		uint8 *tmp_buffer;
-		uint8 *tmp_inc;
-		tmp_inc = tmp_buffer = (uint8 *)malloc((width * 3 + 1) * height);
-
-		for(y=0;y<height;y++)
-		{
-			*tmp_inc = 0;
-			tmp_inc++;
-			for(x=0;x<width;x++)
-			{
-				int r,g,b;
-				u16 pixel = bmp[y*256+x];
-				r = pixel>>10;
-				pixel-=r<<10;
-				g = pixel>>5;
-				pixel-=g<<5;
-				b = pixel;
-				r*=255/31;
-				g*=255/31;
-				b*=255/31;
-				tmp_inc[0] = b;
-				tmp_inc[1] = g;
-				tmp_inc[2] = r;
-				tmp_inc += 3;
-			}
-		}
-
-		if(compress(compmem, &compmemsize, tmp_buffer, height * (width * 3 + 1))!=Z_OK)
-		{
-			if(tmp_buffer) free(tmp_buffer);
-			goto PNGerr;
-		}
-		if(tmp_buffer) free(tmp_buffer);
-		if(!WritePNGChunk(pp,compmemsize,"IDAT",compmem))
-			goto PNGerr;
-	}
-	if(!WritePNGChunk(pp,0,"IEND",0))
-		goto PNGerr;
-
-	free(compmem);
-	fclose(pp);
-
-	return 1;
-
-PNGerr:
-	if(compmem)
-		free(compmem);
-	if(pp)
-		fclose(pp);
-	return(0);
-}
-
-typedef struct
-{
-	u32 size;
-	s32 width;
-	s32 height;
-	u16 planes;
-	u16 bpp;
-	u32 cmptype;
-	u32 imgsize;
-	s32 hppm;
-	s32 vppm;
-	u32 numcol;
-	u32 numimpcol;
-} bmpimgheader_struct;
-
-#include "PACKED.h"
-typedef struct
-{
-	u16 id __PACKED;
-	u32 size __PACKED;
-	u16 reserved1 __PACKED;
-	u16 reserved2 __PACKED;
-	u32 imgoffset __PACKED;
-} bmpfileheader_struct;
-#include "PACKED_END.h"
-
-int NDS_WriteBMP(const char *filename)
-{
-	bmpfileheader_struct fileheader;
-	bmpimgheader_struct imageheader;
-	FILE *file;
-	int i,j;
-	u16 * bmp = (u16 *)GPU_tempScreen;
-	size_t elems_written = 0;
-
-	memset(&fileheader, 0, sizeof(fileheader));
-	fileheader.size = sizeof(fileheader);
-	fileheader.id = 'B' | ('M' << 8);
-	fileheader.imgoffset = sizeof(fileheader)+sizeof(imageheader);
-
-	memset(&imageheader, 0, sizeof(imageheader));
-	imageheader.size = sizeof(imageheader);
-	imageheader.width = 256;
-	imageheader.height = 192*2;
-	imageheader.planes = 1;
-	imageheader.bpp = 24;
-	imageheader.cmptype = 0; // None
-	imageheader.imgsize = imageheader.width * imageheader.height * 3;
-
-	if ((file = fopen(filename,"wb")) == NULL)
-		return 0;
-
-	elems_written += fwrite(&fileheader, 1, sizeof(fileheader), file);
-	elems_written += fwrite(&imageheader, 1, sizeof(imageheader), file);
-
-	for(j=0;j<192*2;j++)
-	{
-		for(i=0;i<256;i++)
-		{
-			u8 r,g,b;
-			u16 pixel = bmp[(192*2-j-1)*256+i];
-			r = pixel>>10;
-			pixel-=r<<10;
-			g = pixel>>5;
-			pixel-=g<<5;
-			b = pixel;
-			r*=255/31;
-			g*=255/31;
-			b*=255/31;
-			elems_written += fwrite(&r, 1, sizeof(u8), file); 
-			elems_written += fwrite(&g, 1, sizeof(u8), file); 
-			elems_written += fwrite(&b, 1, sizeof(u8), file);
-		}
-	}
-	fclose(file);
-
-	return 1;
-}
-
-int NDS_WriteBMP_32bppBuffer(int width, int height, const void* buf, const char *filename)
-{
-	bmpfileheader_struct fileheader;
-	bmpimgheader_struct imageheader;
-	FILE *file;
-	size_t elems_written = 0;
-	memset(&fileheader, 0, sizeof(fileheader));
-	fileheader.size = sizeof(fileheader);
-	fileheader.id = 'B' | ('M' << 8);
-	fileheader.imgoffset = sizeof(fileheader)+sizeof(imageheader);
-
-	memset(&imageheader, 0, sizeof(imageheader));
-	imageheader.size = sizeof(imageheader);
-	imageheader.width = width;
-	imageheader.height = height;
-	imageheader.planes = 1;
-	imageheader.bpp = 32;
-	imageheader.cmptype = 0; // None
-	imageheader.imgsize = imageheader.width * imageheader.height * 4;
-
-	if ((file = fopen(filename,"wb")) == NULL)
-		return 0;
-
-	elems_written += fwrite(&fileheader, 1, sizeof(fileheader), file);
-	elems_written += fwrite(&imageheader, 1, sizeof(imageheader), file);
-
-	for(int i=0;i<height;i++)
-		for(int x=0;x<width;x++)
-		{
-			u8* pixel = (u8*)buf + (height-i-1)*width*4;
-			pixel += (x*4);
-			elems_written += fwrite(pixel+2,1,1,file);
-			elems_written += fwrite(pixel+1,1,1,file);
-			elems_written += fwrite(pixel+0,1,1,file);
-			elems_written += fwrite(pixel+3,1,1,file);
-		}
-	fclose(file);
-
-	return 1;
-}
-
-
-static void
-fill_user_data_area( struct NDS_fw_config_data *user_settings,
-					u8 *data, int count) {
-						u32 crc;
-						int i;
-						u8 *ts_cal_data_area;
-
-						memset( data, 0, 0x100);
-
-						/* version */
-						data[0x00] = 5;
-						data[0x01] = 0;
-
-						/* colour */
-						data[0x02] = user_settings->fav_colour;
-
-						/* birthday month and day */
-						data[0x03] = user_settings->birth_month;
-						data[0x04] = user_settings->birth_day;
-
-						/* nickname and length */
-						for ( i = 0; i < MAX_FW_NICKNAME_LENGTH; i++) {
-							data[0x06 + (i * 2)] = user_settings->nickname[i] & 0xff;
-							data[0x06 + (i * 2) + 1] = (user_settings->nickname[i] >> 8) & 0xff;
-						}
-
-						data[0x1a] = user_settings->nickname_len;
-
-						/* Message */
-						for ( i = 0; i < MAX_FW_MESSAGE_LENGTH; i++) {
-							data[0x1c + (i * 2)] = user_settings->message[i] & 0xff;
-							data[0x1c + (i * 2) + 1] = (user_settings->message[i] >> 8) & 0xff;
-						}
-
-						data[0x50] = user_settings->message_len;
-
-						/*
-						* touch screen calibration
-						*/
-						ts_cal_data_area = &data[0x58];
-						for ( i = 0; i < 2; i++) {
-							/* ADC x y */
-							*ts_cal_data_area++ = user_settings->touch_cal[i].adc_x & 0xff;
-							*ts_cal_data_area++ = (user_settings->touch_cal[i].adc_x >> 8) & 0xff;
-							*ts_cal_data_area++ = user_settings->touch_cal[i].adc_y & 0xff;
-							*ts_cal_data_area++ = (user_settings->touch_cal[i].adc_y >> 8) & 0xff;
-
-							/* screen x y */
-							*ts_cal_data_area++ = user_settings->touch_cal[i].screen_x;
-							*ts_cal_data_area++ = user_settings->touch_cal[i].screen_y;
-						}
-
-						/* language and flags */
-						data[0x64] = user_settings->language;
-						data[0x65] = 0xfc;
-
-						/* update count and crc */
-						data[0x70] = count & 0xff;
-						data[0x71] = (count >> 8) & 0xff;
-
-						crc = calc_CRC16( 0xffff, data, 0x70);
-						data[0x72] = crc & 0xff;
-						data[0x73] = (crc >> 8) & 0xff;
-
-						memset( &data[0x74], 0xff, 0x100 - 0x74);
-}
-
-/* creates an firmware flash image, which contains all needed info to initiate a wifi connection */
-int NDS_CreateDummyFirmware( struct NDS_fw_config_data *user_settings)
-{
-	/*
-	* Create the firmware header
-	*/
-	memset( MMU.fw.data, 0, 0x40000);
-
-	/* firmware identifier */
-	MMU.fw.data[0x8] = 'M';
-	MMU.fw.data[0x8 + 1] = 'A';
-	MMU.fw.data[0x8 + 2] = 'C';
-	MMU.fw.data[0x8 + 3] = 'P';
-
-	/* DS type */
-	if ( user_settings->ds_type == NDS_FW_DS_TYPE_LITE)
-		MMU.fw.data[0x1d] = 0x20;
-	else
-		MMU.fw.data[0x1d] = 0xff;
-
-	/* User Settings offset 0x3fe00 / 8 */
-	MMU.fw.data[0x20] = 0xc0;
-	MMU.fw.data[0x21] = 0x7f;
-
-
-	/*
-	* User settings (at 0x3FE00 and 0x3FF00)
-	*/
-	fill_user_data_area( user_settings, &MMU.fw.data[ 0x3FE00], 0);
-	fill_user_data_area( user_settings, &MMU.fw.data[ 0x3FF00], 1);
-
-	/* Wifi config length */
-	MMU.fw.data[0x2C] = 0x38;
-	MMU.fw.data[0x2D] = 0x01;
-
-	MMU.fw.data[0x2E] = 0x00;
-
-	/* Wifi version */
-	MMU.fw.data[0x2F] = 0x00;
-
-	/* MAC address */
-	memcpy((MMU.fw.data + 0x36), FW_Mac, sizeof(FW_Mac));
-
-	/* Enabled channels */
-	MMU.fw.data[0x3C] = 0xFE;
-	MMU.fw.data[0x3D] = 0x3F;
-
-	MMU.fw.data[0x3E] = 0xFF;
-	MMU.fw.data[0x3F] = 0xFF;
-
-	/* RF related */
-	MMU.fw.data[0x40] = 0x02;
-	MMU.fw.data[0x41] = 0x18;
-	MMU.fw.data[0x42] = 0x0C;
-
-	MMU.fw.data[0x43] = 0x01;
-
-	/* Wifi I/O init values */
-	memcpy((MMU.fw.data + 0x44), FW_WIFIInit, sizeof(FW_WIFIInit));
-
-	/* Wifi BB init values */
-	memcpy((MMU.fw.data + 0x64), FW_BBInit, sizeof(FW_BBInit));
-
-	/* Wifi RF init values */
-	memcpy((MMU.fw.data + 0xCE), FW_RFInit, sizeof(FW_RFInit));
-
-	/* Wifi channel-related init values */
-	memcpy((MMU.fw.data + 0xF2), FW_RFChannel, sizeof(FW_RFChannel));
-	memcpy((MMU.fw.data + 0x146), FW_BBChannel, sizeof(FW_BBChannel));
-	memset((MMU.fw.data + 0x154), 0x10, 0xE);
-
-	/* WFC profiles */
-	memcpy((MMU.fw.data + 0x3FA40), &FW_WFCProfile1, sizeof(FW_WFCProfile));
-	memcpy((MMU.fw.data + 0x3FB40), &FW_WFCProfile2, sizeof(FW_WFCProfile));
-	memcpy((MMU.fw.data + 0x3FC40), &FW_WFCProfile3, sizeof(FW_WFCProfile));
-	(*(u16*)(MMU.fw.data + 0x3FAFE)) = (u16)calc_CRC16(0, (MMU.fw.data + 0x3FA00), 0xFE);
-	(*(u16*)(MMU.fw.data + 0x3FBFE)) = (u16)calc_CRC16(0, (MMU.fw.data + 0x3FB00), 0xFE);
-	(*(u16*)(MMU.fw.data + 0x3FCFE)) = (u16)calc_CRC16(0, (MMU.fw.data + 0x3FC00), 0xFE);
-
-
-	MMU.fw.data[0x162] = 0x19;
-	memset((MMU.fw.data + 0x163), 0xFF, 0x9D);
-
-	/* Wifi settings CRC16 */
-	(*(u16*)(MMU.fw.data + 0x2A)) = calc_CRC16(0, (MMU.fw.data + 0x2C), 0x138);
-
-	return TRUE ;
-}
-
-void
-NDS_FillDefaultFirmwareConfigData( struct NDS_fw_config_data *fw_config) {
-	const char *default_nickname = "yopyop";
-	const char *default_message = "DeSmuME makes you happy!";
-	int i;
-	int str_length;
-
-	memset( fw_config, 0, sizeof( struct NDS_fw_config_data));
-	fw_config->ds_type = NDS_FW_DS_TYPE_FAT;
-
-	fw_config->fav_colour = 7;
-
-	fw_config->birth_day = 23;
-	fw_config->birth_month = 6;
-
-	str_length = strlen( default_nickname);
-	for ( i = 0; i < str_length; i++) {
-		fw_config->nickname[i] = default_nickname[i];
-	}
-	fw_config->nickname_len = str_length;
-
-	str_length = strlen( default_message);
-	for ( i = 0; i < str_length; i++) {
-		fw_config->message[i] = default_message[i];
-	}
-	fw_config->message_len = str_length;
-
-	/* default to English */
-	fw_config->language = 1;
-
-	/* default touchscreen calibration */
-	fw_config->touch_cal[0].adc_x = 0x200;
-	fw_config->touch_cal[0].adc_y = 0x200;
-	fw_config->touch_cal[0].screen_x = 0x20;
-	fw_config->touch_cal[0].screen_y = 0x20;
-
-	fw_config->touch_cal[1].adc_x = 0xe00;
-	fw_config->touch_cal[1].adc_y = 0x800;
-	fw_config->touch_cal[1].screen_x = 0xe0;
-	fw_config->touch_cal[1].screen_y = 0x80;
-}
-
-int NDS_LoadFirmware(const char *filename)
-{
-	int i;
-	unsigned long size;
-	//FILE *file;
-
-	if ((MMU.fw.fp = fopen(filename, "rb+")) == NULL)
-		return -1;
-
-	fseek(MMU.fw.fp, 0, SEEK_END);
-	size = ftell(MMU.fw.fp);
-	fseek(MMU.fw.fp, 0, SEEK_SET);
-
-	if(size > MMU.fw.size)
-	{
-		fclose(MMU.fw.fp);
-		fw_success = FALSE;
-		return -1;
-	}
-
-	i = fread(MMU.fw.data, size, 1, MMU.fw.fp);
-	//fclose(file);
-
-	INFO("Firmware: decrypting NDS firmware %s...\n", filename);
-
-	if(decryptFirmware(MMU.fw.data) == FALSE)
-	{
-		INFO("Firmware: decryption failed.\n");
-		fw_success = FALSE;
-	}
-	else
-	{
-		INFO("Firmware: decryption successful.\n");
-		fw_success = TRUE;
-	}
-
-	return i;
+	FCEUI_StopMovie();
+	gameInfo.closeROM();
 }
 
 void NDS_Sleep() { nds.sleeping = TRUE; }
 
-bool SkipCur2DFrame = false, SkipNext2DFrame = false;
-bool SkipCur3DFrame = false;
+void NDS_TriggerCardEjectIRQ()
+{
+	NDS_makeIrq(ARMCPU_ARM7, IRQ_BIT_GC_IREQ_MC);
+	NDS_makeIrq(ARMCPU_ARM9, IRQ_BIT_GC_IREQ_MC); //zero added on 11-aug-2013 with no proof of accuracy
+}
 
-void NDS_SkipNextFrame() { SkipNext2DFrame = true; SkipCur3DFrame = true; }
+
+class FrameSkipper
+{
+public:
+	void RequestSkip()
+	{
+		nextSkip = true;
+	}
+	void OmitSkip(bool force, bool forceEvenIfCapturing=false)
+	{
+		nextSkip = false;
+		if((force && consecutiveNonCaptures > 30) || forceEvenIfCapturing)
+		{
+			SkipCur2DFrame = false;
+			SkipCur3DFrame = false;
+			SkipNext2DFrame = false;
+			if(forceEvenIfCapturing)
+				consecutiveNonCaptures = 0;
+		}
+	}
+	void Advance()
+	{
+		const GPUEngineA *mainEngine = GPU->GetEngineMain();
+		const IOREG_DISPCAPCNT &DISPCAPCNT = mainEngine->GetIORegisterMap().DISPCAPCNT;
+		const bool capturing = (DISPCAPCNT.CaptureEnable != 0);
+
+		if(capturing && consecutiveNonCaptures > 30)
+		{
+			// the worst-looking graphics corruption problems from frameskip
+			// are the result of skipping the capture on first frame it turns on.
+			// so we do this to handle the capture immediately,
+			// despite the risk of 1 frame of 2d/3d mismatch or wrong screen display.
+			SkipNext2DFrame = false;
+			nextSkip = false;
+		}
+		else if((lastDisplayTarget != mainEngine->GetDisplayByID()) && lastSkip && !skipped)
+		{
+			// if we're switching from not skipping to skipping
+			// and the screens are also switching around this frame,
+			// go for 1 extra frame without skipping.
+			// this avoids the scenario where we only draw one of the two screens
+			// when a game is switching screens every frame.
+			nextSkip = false;
+		}
+
+		if(capturing)
+			consecutiveNonCaptures = 0;
+		else if(!(consecutiveNonCaptures > 9000)) // arbitrary cap to avoid eventual wrap
+			consecutiveNonCaptures++;
+		
+		lastDisplayTarget = mainEngine->GetDisplayByID();
+		lastSkip = skipped;
+		skipped = nextSkip;
+		nextSkip = false;
+
+		SkipCur2DFrame = SkipNext2DFrame;
+		SkipCur3DFrame = skipped;
+		SkipNext2DFrame = skipped;
+	}
+	FORCEINLINE bool ShouldSkip2D()
+	{
+		return SkipCur2DFrame;
+	}
+	FORCEINLINE bool ShouldSkip3D()
+	{
+		return SkipCur3DFrame;
+	}
+	FrameSkipper()
+	{
+		nextSkip = false;
+		skipped = false;
+		lastSkip = false;
+		lastDisplayTarget = NDSDisplayID_Main;
+		SkipCur2DFrame = false;
+		SkipCur3DFrame = false;
+		SkipNext2DFrame = false;
+		consecutiveNonCaptures = 0;
+	}
+private:
+	bool nextSkip;
+	bool skipped;
+	bool lastSkip;
+	NDSDisplayID lastDisplayTarget;
+	int consecutiveNonCaptures;
+	bool SkipCur2DFrame;
+	bool SkipCur3DFrame;
+	bool SkipNext2DFrame;
+};
+static FrameSkipper frameSkipper;
+
+
+void NDS_SkipNextFrame() {
+	if (!driver->AVI_IsRecording()) {
+		frameSkipper.RequestSkip();
+	}
+}
+void NDS_OmitFrameSkip(int force) {
+	frameSkipper.OmitSkip(force > 0, force > 1);
+}
 
 #define INDEX(i) ((((i)>>16)&0xFF0)|(((i)>>4)&0xF))
 
-//#define LOG_ARM9
-//#define LOG_ARM7
-//static bool dolog = false;
 
-
-template<bool FORCE>
-void NDS_exec(s32 nb)
+enum ESI_DISPCNT
 {
-	int i, j;
+	ESI_DISPCNT_HStart, ESI_DISPCNT_HStartIRQ, ESI_DISPCNT_HDraw, ESI_DISPCNT_HBlank
+};
 
-	LagFrameFlag=1;
+u64 nds_timer;
+u64 nds_arm9_timer, nds_arm7_timer;
 
-	if((currFrameCounter&63) == 0)
-		MMU_new.backupDevice.lazy_flush();
+static const u64 kNever = 0xFFFFFFFFFFFFFFFFULL;
 
-	//increase this to execute more instructions in each batch (reducing overhead)
-	//the value of 4 seems to optimize speed.. do lower values increase precision? 
-	//answer: YES, MAYBE. and after 0.9.3 we need to study it (spider-man)
-	const int INSTRUCTIONS_PER_BATCH = 4;
+struct TSequenceItem
+{
+	u64 timestamp;
+	u32 param;
+	bool enabled;
 
-	//decreasing this should increase precision at the cost of speed
-	//the traditional value was somewhere between 100 and 400 depending on circumstances
-	const int CYCLES_TO_WAIT_FOR_IRQ = 400;
-
-	for(; (nb >= nds.cycles) && ((FORCE)||(execute)); )
+	virtual void save(EMUFILE* os)
 	{
-		for (j = 0; j < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); j++)
+		write64le(timestamp,os);
+		write32le(param,os);
+		writebool(enabled,os);
+	}
+
+	virtual bool load(EMUFILE* is)
+	{
+		if(read64le(&timestamp,is) != 1) return false;
+		if(read32le(&param,is) != 1) return false;
+		if(readbool(&enabled,is) != 1) return false;
+		return true;
+	}
+
+	FORCEINLINE bool isTriggered()
+	{
+		return enabled && nds_timer >= timestamp;
+	}
+
+	FORCEINLINE u64 next()
+	{
+		return timestamp;
+	}
+};
+
+struct TSequenceItem_GXFIFO : public TSequenceItem
+{
+	FORCEINLINE bool isTriggered()
+	{
+		return enabled && nds_timer >= MMU.gfx3dCycles;
+	}
+
+	FORCEINLINE void exec()
+	{
+		IF_DEVELOPER(DEBUG_statistics.sequencerExecutionCounters[4]++);
+		while(isTriggered()) {
+			enabled = false;
+			gfx3d_execute3D();
+		}
+	}
+
+	FORCEINLINE u64 next()
+	{
+		if(enabled) return MMU.gfx3dCycles;
+		else return kNever;
+	}
+};
+
+template<int procnum, int num> struct TSequenceItem_Timer : public TSequenceItem
+{
+	FORCEINLINE bool isTriggered()
+	{
+		return enabled && nds_timer >= nds.timerCycle[procnum][num];
+	}
+
+	FORCEINLINE void schedule()
+	{
+		enabled = MMU.timerON[procnum][num] && MMU.timerMODE[procnum][num] != 0xFFFF;
+	}
+
+	FORCEINLINE u64 next()
+	{
+		return nds.timerCycle[procnum][num];
+	}
+
+	FORCEINLINE void exec()
+	{
+		IF_DEVELOPER(DEBUG_statistics.sequencerExecutionCounters[13+procnum*4+num]++);
+		u8* regs = procnum==0?MMU.ARM9_REG:MMU.ARM7_REG;
+		bool first = true;
+		//we'll need to check chained timers..
+		for(int i=num;i<4;i++)
 		{
-			if(nds.ARM9Cycle<=nds.cycles)
+			bool over = false;
+			//maybe too many checks if this is here, but we need it here for now
+			if(!MMU.timerON[procnum][i]) return;
+
+			if(MMU.timerMODE[procnum][i] == 0xFFFF)
 			{
-				for (i = 0; i < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); i++)
+				++(MMU.timer[procnum][i]);
+				over = !MMU.timer[procnum][i];
+			}
+			else
+			{
+				if(!first) break; //this timer isn't chained. break the chain
+				first = false;
+
+				over = true;
+				int remain = 65536 - MMU.timerReload[procnum][i];
+				int ctr=0;
+				while(nds.timerCycle[procnum][i] <= nds_timer) {
+					nds.timerCycle[procnum][i] += (remain << MMU.timerMODE[procnum][i]);
+					ctr++;
+				}
+#ifndef NDEBUG
+				if(ctr>1) {
+					printf("yikes!!!!! please report!\n");
+				}
+#endif
+			}
+
+			if(over)
+			{
+				MMU.timer[procnum][i] = MMU.timerReload[procnum][i];
+				if(T1ReadWord(regs, 0x102 + i*4) & 0x40) 
 				{
-					if(nds.sleeping) {
-						break;
-					} else
-					if(NDS_ARM9.waitIRQ) {
-						nds.ARM9Cycle += CYCLES_TO_WAIT_FOR_IRQ;
-						nds.idleCycles += CYCLES_TO_WAIT_FOR_IRQ;
-						break; //it is rather pointless to do this more than once
-					} else {
-						#ifdef LOG_ARM9
-						if(dolog)
-						{
-							char dasmbuf[1024];
-							char logbuf[4096];
-							if(NDS_ARM9.CPSR.bits.T)
-								des_thumb_instructions_set[((NDS_ARM9.instruction)>>6)&1023](NDS_ARM9.instruct_adr, NDS_ARM9.instruction, dasmbuf);
-							else
-								des_arm_instructions_set[INDEX(NDS_ARM9.instruction)](NDS_ARM9.instruct_adr, NDS_ARM9.instruction, dasmbuf);
+					NDS_makeIrq(procnum, IRQ_BIT_TIMER_0 + i);
+				}
+			}
+			else
+				break; //no more chained timers to trigger. we're done here
+		}
+	}
+};
+
+template<int procnum, int chan> struct TSequenceItem_DMA : public TSequenceItem
+{
+	DmaController* controller;
+
+	FORCEINLINE bool isTriggered()
+	{
+		return (controller->dmaCheck && nds_timer>= controller->nextEvent);
+	}
+
+	FORCEINLINE bool isEnabled() { 
+		return controller->dmaCheck?TRUE:FALSE;
+	}
+
+	FORCEINLINE u64 next()
+	{
+		return controller->nextEvent;
+	}
+
+	FORCEINLINE void exec()
+	{
+		IF_DEVELOPER(DEBUG_statistics.sequencerExecutionCounters[5+procnum*4+chan]++);
+
+		//if (nds.freezeBus) return;
+
+		//printf("exec from TSequenceItem_DMA: %d %d\n",procnum,chan);
+		controller->exec();
+//		//give gxfifo dmas a chance to re-trigger
+//		if(MMU.DMAStartTime[procnum][chan] == EDMAMode_GXFifo) {
+//			MMU.DMAing[procnum][chan] = FALSE;
+//			if (gxFIFO.size <= 127) 
+//			{
+//				execHardware_doDma(procnum,chan,EDMAMode_GXFifo);
+//				if (MMU.DMACompleted[procnum][chan])
+//					goto docomplete;
+//				else return;
+//			}
+//		}
+//
+//docomplete:
+//		if (MMU.DMACompleted[procnum][chan])	
+//		{
+//			u8* regs = procnum==0?MMU.ARM9_REG:MMU.ARM7_REG;
+//
+//			//disable the channel
+//			if(MMU.DMAStartTime[procnum][chan] != EDMAMode_GXFifo) {
+//				T1WriteLong(regs, 0xB8 + (0xC*chan), T1ReadLong(regs, 0xB8 + (0xC*chan)) & 0x7FFFFFFF);
+//				MMU.DMACrt[procnum][chan] &= 0x7FFFFFFF; //blehhh i hate this shit being mirrored in memory
+//			}
+//
+//			if((MMU.DMACrt[procnum][chan])&(1<<30)) {
+//				if(procnum==0) NDS_makeARM9Int(8+chan);
+//				else NDS_makeARM7Int(8+chan);
+//			}
+//
+//			MMU.DMAing[procnum][chan] = FALSE;
+//		}
+
+	}
+};
+
+struct TSequenceItem_divider : public TSequenceItem
+{
+	FORCEINLINE bool isTriggered()
+	{
+		return MMU.divRunning && nds_timer >= MMU.divCycles;
+	}
+
+	bool isEnabled() { return MMU.divRunning!=0; }
+
+	FORCEINLINE u64 next()
+	{
+		return MMU.divCycles;
+	}
+
+	void exec()
+	{
+		IF_DEVELOPER(DEBUG_statistics.sequencerExecutionCounters[2]++);
+		MMU_new.div.busy = 0;
+#ifdef HOST_64 
+		T1WriteQuad(MMU.ARM9_REG, 0x2A0, MMU.divResult);
+		T1WriteQuad(MMU.ARM9_REG, 0x2A8, MMU.divMod);
+#else
+		T1WriteLong(MMU.ARM9_REG, 0x2A0, (u32)MMU.divResult);
+		T1WriteLong(MMU.ARM9_REG, 0x2A4, (u32)(MMU.divResult >> 32));
+		T1WriteLong(MMU.ARM9_REG, 0x2A8, (u32)MMU.divMod);
+		T1WriteLong(MMU.ARM9_REG, 0x2AC, (u32)(MMU.divMod >> 32));
+#endif
+		MMU.divRunning = FALSE;
+	}
+
+};
+
+struct TSequenceItem_sqrtunit : public TSequenceItem
+{
+	FORCEINLINE bool isTriggered()
+	{
+		return MMU.sqrtRunning && nds_timer >= MMU.sqrtCycles;
+	}
+
+	bool isEnabled() { return MMU.sqrtRunning!=0; }
+
+	FORCEINLINE u64 next()
+	{
+		return MMU.sqrtCycles;
+	}
+
+	FORCEINLINE void exec()
+	{
+		IF_DEVELOPER(DEBUG_statistics.sequencerExecutionCounters[3]++);
+		MMU_new.sqrt.busy = 0;
+		T1WriteLong(MMU.ARM9_REG, 0x2B4, MMU.sqrtResult);
+		MMU.sqrtRunning = FALSE;
+	}
+
+};
+
+struct Sequencer
+{
+	bool nds_vblankEnded;
+	bool reschedule;
+	TSequenceItem dispcnt;
+	TSequenceItem wifi;
+	TSequenceItem_divider divider;
+	TSequenceItem_sqrtunit sqrtunit;
+	TSequenceItem_GXFIFO gxfifo;
+	TSequenceItem_DMA<0,0> dma_0_0; TSequenceItem_DMA<0,1> dma_0_1; 
+	TSequenceItem_DMA<0,2> dma_0_2; TSequenceItem_DMA<0,3> dma_0_3; 
+	TSequenceItem_DMA<1,0> dma_1_0; TSequenceItem_DMA<1,1> dma_1_1; 
+	TSequenceItem_DMA<1,2> dma_1_2; TSequenceItem_DMA<1,3> dma_1_3; 
+	TSequenceItem_Timer<0,0> timer_0_0; TSequenceItem_Timer<0,1> timer_0_1;
+	TSequenceItem_Timer<0,2> timer_0_2; TSequenceItem_Timer<0,3> timer_0_3;
+	TSequenceItem_Timer<1,0> timer_1_0; TSequenceItem_Timer<1,1> timer_1_1;
+	TSequenceItem_Timer<1,2> timer_1_2; TSequenceItem_Timer<1,3> timer_1_3;
+
+	void init();
+
+	void execHardware();
+	u64 findNext();
+
+	void save(EMUFILE* os)
+	{
+		write64le(nds_timer,os);
+		write64le(nds_arm9_timer,os);
+		write64le(nds_arm7_timer,os);
+		dispcnt.save(os);
+		divider.save(os);
+		sqrtunit.save(os);
+		gxfifo.save(os);
+		wifi.save(os);
+#define SAVE(I,X,Y) I##_##X##_##Y .save(os);
+		SAVE(timer,0,0); SAVE(timer,0,1); SAVE(timer,0,2); SAVE(timer,0,3); 
+		SAVE(timer,1,0); SAVE(timer,1,1); SAVE(timer,1,2); SAVE(timer,1,3); 
+		SAVE(dma,0,0); SAVE(dma,0,1); SAVE(dma,0,2); SAVE(dma,0,3); 
+		SAVE(dma,1,0); SAVE(dma,1,1); SAVE(dma,1,2); SAVE(dma,1,3); 
+#undef SAVE
+	}
+
+	bool load(EMUFILE* is, int version)
+	{
+		if(read64le(&nds_timer,is) != 1) return false;
+		if(read64le(&nds_arm9_timer,is) != 1) return false;
+		if(read64le(&nds_arm7_timer,is) != 1) return false;
+		if(!dispcnt.load(is)) return false;
+		if(!divider.load(is)) return false;
+		if(!sqrtunit.load(is)) return false;
+		if(!gxfifo.load(is)) return false;
+		if(version >= 1) if(!wifi.load(is)) return false;
+#define LOAD(I,X,Y) if(!I##_##X##_##Y .load(is)) return false;
+		LOAD(timer,0,0); LOAD(timer,0,1); LOAD(timer,0,2); LOAD(timer,0,3); 
+		LOAD(timer,1,0); LOAD(timer,1,1); LOAD(timer,1,2); LOAD(timer,1,3); 
+		LOAD(dma,0,0); LOAD(dma,0,1); LOAD(dma,0,2); LOAD(dma,0,3); 
+		LOAD(dma,1,0); LOAD(dma,1,1); LOAD(dma,1,2); LOAD(dma,1,3); 
+#undef LOAD
+
+		return true;
+	}
+
+} sequencer;
+
+void NDS_RescheduleGXFIFO(u32 cost)
+{
+	if(!sequencer.gxfifo.enabled) {
+		MMU.gfx3dCycles = nds_timer;
+		sequencer.gxfifo.enabled = true;
+	}
+	MMU.gfx3dCycles += cost;
+	NDS_Reschedule();
+}
+
+void NDS_RescheduleTimers()
+{
+#define check(X,Y) sequencer.timer_##X##_##Y .schedule();
+	check(0,0); check(0,1); check(0,2); check(0,3);
+	check(1,0); check(1,1); check(1,2); check(1,3);
+#undef check
+
+	NDS_Reschedule();
+}
+
+void NDS_RescheduleDMA()
+{
+	//TBD
+	NDS_Reschedule();
+
+}
+
+static void initSchedule()
+{
+	sequencer.init();
+
+	//begin at the very end of the last scanline
+	//so that at t=0 we can increment to scanline=0
+	nds.VCount = 262; 
+
+	sequencer.nds_vblankEnded = false;
+}
+
+
+// 2196372 ~= (ARM7_CLOCK << 16) / 1000000
+// This value makes more sense to me, because:
+// ARM7_CLOCK   = 33.51 mhz
+//				= 33513982 cycles per second
+// 				= 33.513982 cycles per microsecond
+const u64 kWifiCycles = 67;//34*2;
+//(this isn't very precise. I don't think it needs to be)
+
+void Sequencer::init()
+{
+	NDS_RescheduleTimers();
+	NDS_RescheduleDMA();
+
+	reschedule = false;
+	nds_timer = 0;
+	nds_arm9_timer = 0;
+	nds_arm7_timer = 0;
+
+	dispcnt.enabled = true;
+	dispcnt.param = ESI_DISPCNT_HStart;
+	dispcnt.timestamp = 0;
+
+	gxfifo.enabled = false;
+
+	dma_0_0.controller = &MMU_new.dma[0][0];
+	dma_0_1.controller = &MMU_new.dma[0][1];
+	dma_0_2.controller = &MMU_new.dma[0][2];
+	dma_0_3.controller = &MMU_new.dma[0][3];
+	dma_1_0.controller = &MMU_new.dma[1][0];
+	dma_1_1.controller = &MMU_new.dma[1][1];
+	dma_1_2.controller = &MMU_new.dma[1][2];
+	dma_1_3.controller = &MMU_new.dma[1][3];
+
+
+	#ifdef EXPERIMENTAL_WIFI_COMM
+	wifi.enabled = true;
+	wifi.timestamp = kWifiCycles;
+	#else
+	wifi.enabled = false;
+	#endif
+}
+
+static void execHardware_hblank()
+{
+	//this logic keeps moving around.
+	//now, we try and give the game as much time as possible to finish doing its work for the scanline,
+	//by drawing scanline N at the end of drawing time (but before subsequent interrupt or hdma-driven events happen)
+	//don't try to do this at the end of the scanline, because some games (sonic classics) may use hblank IRQ to set
+	//scroll regs for the next scanline
+	if(nds.VCount<192)
+	{
+		GPU->RenderLine(nds.VCount, frameSkipper.ShouldSkip2D());
 		
-							printf("%05d %08d 9:%08X %08X %-30s %08X R00:%08X R01:%08X R02:%08X R03:%08X R04:%08X R05:%08X R06:%08X R07:%08X R08:%08X R09:%08X R10:%08X R11:%08X R12:%08X R13:%08X R14:%08X R15:%08X\n",
-								currFrameCounter, nds.cycles, 
-								NDS_ARM9.instruct_adr,NDS_ARM9.instruction, dasmbuf, 
-								NDS_ARM9.R[0],  NDS_ARM9.R[1],  NDS_ARM9.R[2],  NDS_ARM9.R[3],  NDS_ARM9.R[4],  NDS_ARM9.R[5],  NDS_ARM9.R[6],  NDS_ARM9.R[7], 
-								NDS_ARM9.R[8],  NDS_ARM9.R[9],  NDS_ARM9.R[10],  NDS_ARM9.R[11],  NDS_ARM9.R[12],  NDS_ARM9.R[13],  NDS_ARM9.R[14],  NDS_ARM9.R[15]);  
-						}
-						#endif
+		//trigger hblank dmas
+		//but notice, we do that just after we finished drawing the line
+		//(values copied by this hdma should not be used until the next scanline)
+		triggerDma(EDMAMode_HBlank);
+	}
 
-						bool r7zero = NDS_ARM9.R[7] == 0;
-						nds.ARM9Cycle += armcpu_exec<ARMCPU_ARM9>();
-						bool r7one = NDS_ARM9.R[7] == 1;
-					}
-				}
-#ifdef _WIN32
-#ifdef DEVELOPER
-				DisassemblerTools_Refresh<ARMCPU_ARM9>();
-#endif
-#endif
-			}
+	if(nds.VCount==262)
+	{
+		//we need to trigger one last hblank dma since 
+		//a. we're sort of lagged behind by one scanline
+		//b. i think that 193 hblanks actually fire (one for the hblank in scanline 262)
+		//this is demonstrated by NSMB splot-parallaxing clouds
+		//for some reason the game will setup two hdma scroll register buffers
+		//to be run consecutively, and unless we do this, the second buffer will be offset by one scanline
+		//causing a glitch in the 0th scanline
+		//triggerDma(EDMAMode_HBlank);
 
-#ifdef EXPERIMENTAL_WIFI
-#if 0
+		//BUT! this was removed in order to make glitches in megaman zero collection (mmz 4 1st level) work.
+		//and, it seems that it is no longer necessary in nsmb. perhaps something else fixed it
+	}
 
-			if((nds.ARM7Cycle % 0x3F03) == 0)
-			{
-				/* 3F03 arm7 cycles = ~1usec */
-				// WRONG!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-				// 1 usec = ~33 ARM7 cycles because ARM7 runs at 33.51 mhz
-				// 33.51 mhz = 33.51 million cycles per second = 33.51 cycles per usec
-				WIFI_usTrigger(&wifiMac) ;
-			}
-#endif
 
-			int nds7old = nds.ARM7Cycle;
-#endif
+	//turn on hblank status bit
+	T1WriteWord(MMU.ARM9_REG, 4, T1ReadWord(MMU.ARM9_REG, 4) | 2);
+	T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) | 2);
 
-			if(nds.ARM7Cycle<=nds.cycles)
-			{
-				for (i = 0; i < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); i++)
-				{
-					if(nds.sleeping) {
-						break;
-					} else
-					if(NDS_ARM7.waitIRQ)
-					{
-						nds.ARM7Cycle += CYCLES_TO_WAIT_FOR_IRQ;
-						break; //it is rather pointless to do this more than once
-					}
-					else
-					{
-						#ifdef LOG_ARM7
-						if(dolog)
-						{
-							char dasmbuf[1024];
-							if(NDS_ARM7.CPSR.bits.T)
-								des_thumb_instructions_set[((NDS_ARM7.instruction)>>6)&1023](NDS_ARM7.instruct_adr, NDS_ARM7.instruction, dasmbuf);
-							else
-								des_arm_instructions_set[INDEX(NDS_ARM7.instruction)](NDS_ARM7.instruct_adr, NDS_ARM7.instruction, dasmbuf);
-							printf("%05d %08d 7:%08X %08X %-30s %08X R00:%08X R01:%08X R02:%08X R03:%08X R04:%08X R05:%08X R06:%08X R07:%08X R08:%08X R09:%08X R10:%08X R11:%08X R12:%08X R13:%08X R14:%08X R15:%08X\n",
-								currFrameCounter, nds.cycles, 
-								NDS_ARM7.instruct_adr,NDS_ARM7.instruction, dasmbuf, 
-								NDS_ARM7.R[0],  NDS_ARM7.R[1],  NDS_ARM7.R[2],  NDS_ARM7.R[3],  NDS_ARM7.R[4],  NDS_ARM7.R[5],  NDS_ARM7.R[6],  NDS_ARM7.R[7], 
-								NDS_ARM7.R[8],  NDS_ARM7.R[9],  NDS_ARM7.R[10],  NDS_ARM7.R[11],  NDS_ARM7.R[12],  NDS_ARM7.R[13],  NDS_ARM7.R[14],  NDS_ARM7.R[15],
-								NDS_ARM7.CPSR, NDS_ARM7.SPSR);  
-						}
-						#endif
-						nds.ARM7Cycle += (armcpu_exec<ARMCPU_ARM7>()<<1);
-					}
-				}
-#ifdef _WIN32
-#ifdef DEVELOPER
-				DisassemblerTools_Refresh<ARMCPU_ARM7>();
-#endif
-#endif
-			}
+	//fire hblank interrupts if necessary
+	if(T1ReadWord(MMU.ARM9_REG, 4) & 0x10) NDS_makeIrq(ARMCPU_ARM9,IRQ_BIT_LCD_HBLANK);
+	if(T1ReadWord(MMU.ARM7_REG, 4) & 0x10) NDS_makeIrq(ARMCPU_ARM7,IRQ_BIT_LCD_HBLANK);
 
-//this doesnt work anyway. why take a speed hit for public releases?
-// Luigi__: I don't agree. We should start include wifi emulation in public releases
-// because it already allows games to not hang during wifi operations
-// and thus games that perform wifi checks upon boot shouldn't hang with wifi
-// emulation turned on.
-#ifndef PUBLIC_RELEASE
-#ifdef EXPERIMENTAL_WIFI
-			// FIXME: the wifi stuff isn't actually clocked by the ARM7 clock, 
-			// but by a 22 mhz oscillator.
-			// But do we really care? while we're triggering wifi core every microsecond,
-			// everything is fine, isn't it?
+	//emulation housekeeping. for some reason we always do this at hblank,
+	//even though it sounds more reasonable to do it at hstart
+	SPU_Emulate_core();
+	driver->AVI_SoundUpdate(SPU_core->outbuf,spu_core_samples);
+	WAV_WavSoundUpdate(SPU_core->outbuf,spu_core_samples);
+}
 
-			//zeromus way: i did this in a rush and it is not perfect, but it is more like what it needs to be
-			//nds.wifiCycle += (nds.ARM7Cycle-nds7old)<<16;
-			//while(nds.wifiCycle > 0)
-			//{
-			//	nds.wifiCycle -= 946453; //22*22000000*65536/ARM7_CLOCK;
-			//	WIFI_usTrigger(&wifiMac);
-			//	WIFI_SoftAP_usTrigger(&wifiMac);
-			//}
-			//
-			//luigi's way>
-			// new one, more like zeromus way
-			// but I can't understand why it uses that value (22*22000000*65536/ARM7_CLOCK)
-			nds.wifiCycle += (nds.ARM7Cycle - nds7old) << 16;
-			while (nds.wifiCycle > 0)
-			{
-				// 2196372 ~= (ARM7_CLOCK << 16) / 1000000
-				// This value makes more sense to me, because:
-				// ARM7_CLOCK   = 33.51 mhz
-				//				= 33513982 cycles per second
-				// 				= 33.513982 cycles per microsecond
-				// The value is left shifted by 16 for more precision.
-				nds.wifiCycle -= (2196372 << 1);
+static void execHardware_hstart_vblankEnd()
+{
+	sequencer.nds_vblankEnded = true;
+	sequencer.reschedule = true;
 
-				WIFI_usTrigger(&wifiMac);
-				WIFI_SoftAP_usTrigger(&wifiMac);
-			}
-#endif
-#endif
-		} // for (j = 0; j < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); j++)
+	//turn off vblank status bit
+	T1WriteWord(MMU.ARM9_REG, 4, T1ReadWord(MMU.ARM9_REG, 4) & ~1);
+	T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) & ~1);
 
-		if(!nds.sleeping)
+	//some emulation housekeeping
+	frameSkipper.Advance();
+}
+
+static void execHardware_hstart_vblankStart()
+{
+	//printf("--------VBLANK!!!--------\n");
+
+	//fire vblank interrupts if necessary
+	for(int i=0;i<2;i++)
+	{
+		if(MMU.reg_IF_pending[i] & (1<<IRQ_BIT_LCD_VBLANK))
 		{
+			MMU.reg_IF_pending[i] &= ~(1<<IRQ_BIT_LCD_VBLANK);
+			NDS_makeIrq(i,IRQ_BIT_LCD_VBLANK);
 
-		//	for(i = 0; i < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); i++)
-		//	{
-
-		nds.cycles = std::min(nds.ARM9Cycle,nds.ARM7Cycle);
-
-		//debug();
-
-		if(nds.cycles>=nds.nextHBlank)
-		{
-			if(!nds.lignerendu)
-			{
-				T1WriteWord(ARM9Mem.ARM9_REG, 4, T1ReadWord(ARM9Mem.ARM9_REG, 4) | 2);
-				T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) | 2);
-				NDS_ARM9HBlankInt();
-				NDS_ARM7HBlankInt();
-				SPU_Emulate_core();
-				driver->AVI_SoundUpdate(SPU_core->outbuf,spu_core_samples);
-				WAV_WavSoundUpdate(SPU_core->outbuf,spu_core_samples);
-				if(nds.VCount<192)
-				{
-					if(!SkipCur2DFrame)
-					{
-						GPU_ligne(&MainScreen, nds.VCount);
-						GPU_ligne(&SubScreen, nds.VCount);
-					}
-
-					if(MMU.DMAStartTime[0][0] == 2)
-						MMU_doDMA<ARMCPU_ARM9>(0);
-					if(MMU.DMAStartTime[0][1] == 2)
-						MMU_doDMA<ARMCPU_ARM9>(1);
-					if(MMU.DMAStartTime[0][2] == 2)
-						MMU_doDMA<ARMCPU_ARM9>(2);
-					if(MMU.DMAStartTime[0][3] == 2)
-						MMU_doDMA<ARMCPU_ARM9>(3);
-				}
-				nds.lignerendu = TRUE;
-			}
-			if(nds.cycles>=nds.nextHBlank+1092)
-			{
-				u32 vmatch;
-
-				++nds.VCount;
-				nds.nextHBlank += 4260;
-				T1WriteWord(ARM9Mem.ARM9_REG, 4, T1ReadWord(ARM9Mem.ARM9_REG, 4) & 0xFFFD);
-				T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) & 0xFFFD);
-
-				if(MMU.DMAStartTime[0][0] == 3)
-					MMU_doDMA<ARMCPU_ARM9>(0);
-				if(MMU.DMAStartTime[0][1] == 3)
-					MMU_doDMA<ARMCPU_ARM9>(1);
-				if(MMU.DMAStartTime[0][2] == 3)
-					MMU_doDMA<ARMCPU_ARM9>(2);
-				if(MMU.DMAStartTime[0][3] == 3)
-					MMU_doDMA<ARMCPU_ARM9>(3);
-
-				// Main memory display
-				if(MMU.DMAStartTime[0][0] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM9>(0);
-					MMU.DMAStartTime[0][0] = 0;
-				}
-				if(MMU.DMAStartTime[0][1] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM9>(1);
-					MMU.DMAStartTime[0][1] = 0;
-				}
-				if(MMU.DMAStartTime[0][2] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM9>(2);
-					MMU.DMAStartTime[0][2] = 0;
-				}
-				if(MMU.DMAStartTime[0][3] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM9>(3);
-					MMU.DMAStartTime[0][3] = 0;
-				}
-
-				if(MMU.DMAStartTime[1][0] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM7>(0);
-					MMU.DMAStartTime[1][0] = 0;
-				}
-				if(MMU.DMAStartTime[1][1] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM7>(1);
-					MMU.DMAStartTime[0][1] = 0;
-				}
-				if(MMU.DMAStartTime[1][2] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM7>(2);
-					MMU.DMAStartTime[1][2] = 0;
-				}
-				if(MMU.DMAStartTime[1][3] == 4)
-				{
-					MMU_doDMA<ARMCPU_ARM7>(3);
-					MMU.DMAStartTime[1][3] = 0;
-				}
-
-				nds.lignerendu = FALSE;
-				if(nds.VCount==192)
-				{
-					//osdA->update();
-					gfx3d_VBlankSignal();
-
-					if(SkipNext2DFrame)
-					{
-						SkipCur2DFrame = true;
-						SkipNext2DFrame = false;
-					}
-					else
-						SkipCur2DFrame = false;
-
-					T1WriteWord(ARM9Mem.ARM9_REG, 4, T1ReadWord(ARM9Mem.ARM9_REG, 4) | 1);
-					T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) | 1);
-					NDS_ARM9VBlankInt();
-					NDS_ARM7VBlankInt();
-					cheatsProcess();
-
-					nds.runCycleCollector[nds.idleFrameCounter] = 1120380-nds.idleCycles;
-					nds.idleFrameCounter++;
-					nds.idleFrameCounter &= 15;
-					nds.idleCycles = 0;
-
-
-					if(MMU.DMAStartTime[0][0] == 1)
-						MMU_doDMA<ARMCPU_ARM9>(0);
-					if(MMU.DMAStartTime[0][1] == 1)
-						MMU_doDMA<ARMCPU_ARM9>(1);
-					if(MMU.DMAStartTime[0][2] == 1)
-						MMU_doDMA<ARMCPU_ARM9>(2);
-					if(MMU.DMAStartTime[0][3] == 1)
-						MMU_doDMA<ARMCPU_ARM9>(3);
-
-					if(MMU.DMAStartTime[1][0] == 1)
-						MMU_doDMA<ARMCPU_ARM7>(0);
-					if(MMU.DMAStartTime[1][1] == 1)
-						MMU_doDMA<ARMCPU_ARM7>(1);
-					if(MMU.DMAStartTime[1][2] == 1)
-						MMU_doDMA<ARMCPU_ARM7>(2);
-					if(MMU.DMAStartTime[1][3] == 1)
-						MMU_doDMA<ARMCPU_ARM7>(3);
-				}
-				else if(nds.VCount==214)
-				{
-					gfx3d_VBlankEndSignal(SkipCur3DFrame);
-					SkipCur3DFrame = false;
-				}
-				else if(nds.VCount==263)
-				{
-					//osd->update();
-					//osdB->update();
-					gpu_UpdateRender();
-
-					nds.nextHBlank = 3168;
-					nds.VCount = 0;
-					T1WriteWord(ARM9Mem.ARM9_REG, 4, T1ReadWord(ARM9Mem.ARM9_REG, 4) & 0xFFFE);
-					T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) & 0xFFFE);
-
-					nds.cycles -= (560190<<1);
-					nds.ARM9Cycle -= (560190<<1);
-					nds.ARM7Cycle -= (560190<<1);
-					nb -= (560190<<1);
-
-					if(MMU.divRunning)
-					{
-						MMU.divCycles -= (560190 << 1);
-					}
-
-					if(MMU.sqrtRunning)
-					{
-						MMU.sqrtCycles -= (560190 << 1);
-					}
-
-					if (MMU.CheckTimers)
-					{
-						if(MMU.timerON[0][0])	nds.timerCycle[0][0] -= (560190<<1);
-						if(MMU.timerON[0][1])	nds.timerCycle[0][1] -= (560190<<1);
-						if(MMU.timerON[0][2])	nds.timerCycle[0][2] -= (560190<<1);
-						if(MMU.timerON[0][3])	nds.timerCycle[0][3] -= (560190<<1);
-
-						if(MMU.timerON[1][0])	nds.timerCycle[1][0] -= (560190<<1);
-						if(MMU.timerON[1][1])	nds.timerCycle[1][1] -= (560190<<1);
-						if(MMU.timerON[1][2])	nds.timerCycle[1][2] -= (560190<<1);
-						if(MMU.timerON[1][3])	nds.timerCycle[1][3] -= (560190<<1);
-					}
-
-					if (MMU.CheckDMAs)
-					{
-						if(MMU.DMAing[0][0])	MMU.DMACycle[0][0] -= (560190<<1);
-						if(MMU.DMAing[0][1])	MMU.DMACycle[0][1] -= (560190<<1);
-						if(MMU.DMAing[0][2])	MMU.DMACycle[0][2] -= (560190<<1);
-						if(MMU.DMAing[0][3])	MMU.DMACycle[0][3] -= (560190<<1);
-
-						if(MMU.DMAing[1][0])	MMU.DMACycle[1][0] -= (560190<<1);
-						if(MMU.DMAing[1][1])	MMU.DMACycle[1][1] -= (560190<<1);
-						if(MMU.DMAing[1][2])	MMU.DMACycle[1][2] -= (560190<<1);
-						if(MMU.DMAing[1][3])	MMU.DMACycle[1][3] -= (560190<<1);
-					}
-				}
-
-				T1WriteWord(ARM9Mem.ARM9_REG, 6, nds.VCount);
-				T1WriteWord(ARM9Mem.ARM9_REG, 0x1006, nds.VCount);
-				T1WriteWord(MMU.ARM7_REG, 6, nds.VCount);
-				T1WriteWord(MMU.ARM7_REG, 0x1006, nds.VCount);
-
-				vmatch = T1ReadWord(ARM9Mem.ARM9_REG, 4);
-				if(nds.VCount==((vmatch>>8)|((vmatch<<1)&(1<<8))))
-				{
-					T1WriteWord(ARM9Mem.ARM9_REG, 4, T1ReadWord(ARM9Mem.ARM9_REG, 4) | 4);
-					if(T1ReadWord(ARM9Mem.ARM9_REG, 4) & 32)
-						NDS_makeARM9Int(2);
-				}
-				else
-					T1WriteWord(ARM9Mem.ARM9_REG, 4, T1ReadWord(ARM9Mem.ARM9_REG, 4) & 0xFFFB);
-
-				vmatch = T1ReadWord(MMU.ARM7_REG, 4);
-				if(nds.VCount==((vmatch>>8)|((vmatch<<1)&(1<<8))))
-				{
-					T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) | 4);
-					if(T1ReadWord(MMU.ARM7_REG, 4) & 32)
-						NDS_makeARM7Int(2);
-				}
-				else
-					T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) & 0xFFFB);
-			}
-		} // if(nds.cycles >= nds.nextHBlank)
-
-	/*	} // for(i = 0; i < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); i++)
-
-		} // if(!nds.sleeping)
-
-		} // for (j = 0; j < INSTRUCTIONS_PER_BATCH && (!FORCE) && (execute); j++)
-
-		if(!nds.sleeping)
-		{*/
-
-		if(MMU.divRunning)
-		{
-			if(nds.cycles > MMU.divCycles)
-			{
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x2A0, (u32)MMU.divResult);
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x2A4, (u32)(MMU.divResult >> 32));
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x2A8, (u32)MMU.divMod);
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x2AC, (u32)(MMU.divMod >> 32));
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x280, MMU.divCnt);
-
-				MMU.divRunning = FALSE;
-			}
+			//for ARM7, cheats process when a vblank IRQ fires. necessary for AR compatibility and to stop cheats from breaking game boot-ups.
+			//note that how we process raw cheats is up to us. so we'll do it the same way we used to, elsewhere
+			if (i==1 && cheats)
+				cheats->process(CHEAT_TYPE_AR);
 		}
+	}
 
-		if(MMU.sqrtRunning)
-		{
-			if(nds.cycles > MMU.sqrtCycles)
-			{
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x2B4, MMU.sqrtResult);
-				T1WriteLong(MMU.MMU_MEM[ARMCPU_ARM9][0x40], 0x2B0, MMU.sqrtCnt);
+	//trigger vblank dmas
+	triggerDma(EDMAMode_VBlank);
 
-				MMU.sqrtRunning = FALSE;
-			}
+	//tracking for arm9 load average
+	nds.runCycleCollector[0][nds.idleFrameCounter] = 1120380-nds.idleCycles[0];
+	nds.runCycleCollector[1][nds.idleFrameCounter] = 1120380-nds.idleCycles[1];
+	nds.idleFrameCounter++;
+	nds.idleFrameCounter &= 15;
+	nds.idleCycles[0] = 0;
+	nds.idleCycles[1] = 0;
+}
+
+static u16 execHardware_gen_vmatch_goal()
+{
+	u16 vmatch = T1ReadWord(MMU.ARM9_REG, 4);
+	vmatch = ((vmatch>>8)|((vmatch<<1)&(1<<8)));
+	return vmatch;
+}
+
+static void execHardware_hstart_vcount_irq()
+{
+	//trigger pending VMATCH irqs
+	if(MMU.reg_IF_pending[ARMCPU_ARM9] & (1<<IRQ_BIT_LCD_VMATCH))
+	{
+		MMU.reg_IF_pending[ARMCPU_ARM9] &= ~(1<<IRQ_BIT_LCD_VMATCH);
+		NDS_makeIrq(ARMCPU_ARM9,IRQ_BIT_LCD_VMATCH);
+	}
+	if(MMU.reg_IF_pending[ARMCPU_ARM7] & (1<<IRQ_BIT_LCD_VMATCH))
+	{
+		MMU.reg_IF_pending[ARMCPU_ARM7] &= ~(1<<IRQ_BIT_LCD_VMATCH);
+		NDS_makeIrq(ARMCPU_ARM7,IRQ_BIT_LCD_VMATCH);
+	}
+}
+
+static void execHardware_hstart_vcount()
+{
+	u16 vmatch = execHardware_gen_vmatch_goal();
+	if(nds.VCount==vmatch)
+	{
+		//arm9 vmatch
+		T1WriteWord(MMU.ARM9_REG, 4, T1ReadWord(MMU.ARM9_REG, 4) | 4);
+		if(T1ReadWord(MMU.ARM9_REG, 4) & 32) {
+			MMU.reg_IF_pending[ARMCPU_ARM9] |= (1<<IRQ_BIT_LCD_VMATCH);
 		}
+	}
+	else
+		T1WriteWord(MMU.ARM9_REG, 4, T1ReadWord(MMU.ARM9_REG, 4) & 0xFFFB);
 
-		if (MMU.CheckTimers)
-		{
-			/* assume the timers have not expired */
-			nds.timerOver[0][0] = 0;
-			nds.timerOver[0][1] = 0;
-			nds.timerOver[0][2] = 0;
-			nds.timerOver[0][3] = 0;
-			nds.timerOver[1][0] = 0;
-			nds.timerOver[1][1] = 0;
-			nds.timerOver[1][2] = 0;
-			nds.timerOver[1][3] = 0;
-			if(MMU.timerON[0][0])
-			{
-				if(MMU.timerRUN[0][0])
-				{
-					switch(MMU.timerMODE[0][0])
-					{
-					case 0xFFFF :
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[0][0])>>MMU.timerMODE[0][0];
-							nds.old = MMU.timer[0][0];
-							MMU.timer[0][0] += nds.diff;
-							nds.timerCycle[0][0] += (nds.diff << MMU.timerMODE[0][0]);
-							nds.timerOver[0][0] = nds.old>MMU.timer[0][0];
-							if(nds.timerOver[0][0])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x102) & 0x40)
-									NDS_makeARM9Int(3);
-								MMU.timer[0][0] = MMU.timerReload[0][0];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[0][0] = TRUE;
-					nds.timerCycle[0][0] = nds.cycles;
-				}
-			}
-			if(MMU.timerON[0][1])
-			{
-				if(MMU.timerRUN[0][1])
-				{
-					switch(MMU.timerMODE[0][1])
-					{
-					case 0xFFFF :
-						if(nds.timerOver[0][0])
-						{
-							++(MMU.timer[0][1]);
-							nds.timerOver[0][1] = !MMU.timer[0][1];
-							if (nds.timerOver[0][1])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x106) & 0x40)
-									NDS_makeARM9Int(4);
-								MMU.timer[0][1] = MMU.timerReload[0][1];
-							}
-						}
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[0][1])>>MMU.timerMODE[0][1];
-							nds.old = MMU.timer[0][1];
-							MMU.timer[0][1] += nds.diff;
-							nds.timerCycle[0][1] += nds.diff << MMU.timerMODE[0][1];
-							nds.timerOver[0][1] = nds.old>MMU.timer[0][1];
-							if(nds.timerOver[0][1])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x106) & 0x40)
-									NDS_makeARM9Int(4);
-								MMU.timer[0][1] = MMU.timerReload[0][1];
-							}
-						}
-						break;
+	vmatch = T1ReadWord(MMU.ARM7_REG, 4);
+	vmatch = ((vmatch>>8)|((vmatch<<1)&(1<<8)));
+	if(nds.VCount==vmatch)
+	{
+		//arm7 vmatch
+		T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) | 4);
+		if(T1ReadWord(MMU.ARM7_REG, 4) & 32)
+			MMU.reg_IF_pending[ARMCPU_ARM7] |= (1<<IRQ_BIT_LCD_VMATCH);
+	}
+	else
+		T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) & 0xFFFB);
+}
 
-					}
-				}
-				else
-				{
-					MMU.timerRUN[0][1] = TRUE;
-					nds.timerCycle[0][1] = nds.cycles;
-				}
-			}
-			if(MMU.timerON[0][2])
-			{
-				if(MMU.timerRUN[0][2])
-				{
-					switch(MMU.timerMODE[0][2])
-					{
-					case 0xFFFF :
-						if(nds.timerOver[0][1])
-						{
-							++(MMU.timer[0][2]);
-							nds.timerOver[0][2] = !MMU.timer[0][2];
-							if (nds.timerOver[0][2])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x10A) & 0x40)
-									NDS_makeARM9Int(5);
-								MMU.timer[0][2] = MMU.timerReload[0][2];
-							}
-						}
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[0][2])>>MMU.timerMODE[0][2];
-							nds.old = MMU.timer[0][2];
-							MMU.timer[0][2] += nds.diff;
-							nds.timerCycle[0][2] += nds.diff << MMU.timerMODE[0][2];
-							nds.timerOver[0][2] = nds.old>MMU.timer[0][2];
-							if(nds.timerOver[0][2])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x10A) & 0x40)
-									NDS_makeARM9Int(5);
-								MMU.timer[0][2] = MMU.timerReload[0][2];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[0][2] = TRUE;
-					nds.timerCycle[0][2] = nds.cycles;
-				}
-			}
-			if(MMU.timerON[0][3])
-			{
-				if(MMU.timerRUN[0][3])
-				{
-					switch(MMU.timerMODE[0][3])
-					{
-					case 0xFFFF :
-						if(nds.timerOver[0][2])
-						{
-							++(MMU.timer[0][3]);
-							nds.timerOver[0][3] = !MMU.timer[0][3];
-							if (nds.timerOver[0][3])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x10E) & 0x40)
-									NDS_makeARM9Int(6);
-								MMU.timer[0][3] = MMU.timerReload[0][3];
-							}
-						}
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[0][3])>>MMU.timerMODE[0][3];
-							nds.old = MMU.timer[0][3];
-							MMU.timer[0][3] += nds.diff;
-							nds.timerCycle[0][3] += nds.diff << MMU.timerMODE[0][3];
-							nds.timerOver[0][3] = nds.old>MMU.timer[0][3];
-							if(nds.timerOver[0][3])
-							{
-								if(T1ReadWord(ARM9Mem.ARM9_REG, 0x10E) & 0x40)
-									NDS_makeARM9Int(6);
-								MMU.timer[0][3] = MMU.timerReload[0][3];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[0][3] = TRUE;
-					nds.timerCycle[0][3] = nds.cycles;
-				}
-			}
+static void execHardware_hdraw()
+{
+	//due to hacks in our selection of rendering time, we do not actually render here as intended.
+	//consider changing this if there is some problem with raster fx timing but check the documentation near the gpu rendering calls
+	//to make sure you check for regressions (nsmb, sonic classics, et al)
+}
 
-			if(MMU.timerON[1][0])
-			{
-				if(MMU.timerRUN[1][0])
-				{
-					switch(MMU.timerMODE[1][0])
-					{
-					case 0xFFFF :
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[1][0])>>MMU.timerMODE[1][0];
-							nds.old = MMU.timer[1][0];
-							MMU.timer[1][0] += nds.diff;
-							nds.timerCycle[1][0] += nds.diff << MMU.timerMODE[1][0];
-							nds.timerOver[1][0] = nds.old>MMU.timer[1][0];
-							if(nds.timerOver[1][0])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x102) & 0x40)
-									NDS_makeARM7Int(3);
-								MMU.timer[1][0] = MMU.timerReload[1][0];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[1][0] = TRUE;
-					nds.timerCycle[1][0] = nds.cycles;
-				}
-			}
-			if(MMU.timerON[1][1])
-			{
-				if(MMU.timerRUN[1][1])
-				{
-					switch(MMU.timerMODE[1][1])
-					{
-					case 0xFFFF :
-						if(nds.timerOver[1][0])
-						{
-							++(MMU.timer[1][1]);
-							nds.timerOver[1][1] = !MMU.timer[1][1];
-							if (nds.timerOver[1][1])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x106) & 0x40)
-									NDS_makeARM7Int(4);
-								MMU.timer[1][1] = MMU.timerReload[1][1];
-							}
-						}
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[1][1])>>MMU.timerMODE[1][1];
-							nds.old = MMU.timer[1][1];
-							MMU.timer[1][1] += nds.diff;
-							nds.timerCycle[1][1] += nds.diff << MMU.timerMODE[1][1];
-							nds.timerOver[1][1] = nds.old>MMU.timer[1][1];
-							if(nds.timerOver[1][1])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x106) & 0x40)
-									NDS_makeARM7Int(4);
-								MMU.timer[1][1] = MMU.timerReload[1][1];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[1][1] = TRUE;
-					nds.timerCycle[1][1] = nds.cycles;
-				}
-			}
-			if(MMU.timerON[1][2])
-			{
-				if(MMU.timerRUN[1][2])
-				{
-					switch(MMU.timerMODE[1][2])
-					{
-					case 0xFFFF :
-						if(nds.timerOver[1][1])
-						{
-							++(MMU.timer[1][2]);
-							nds.timerOver[1][2] = !MMU.timer[1][2];
-							if (nds.timerOver[1][2])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x10A) & 0x40)
-									NDS_makeARM7Int(5);
-								MMU.timer[1][2] = MMU.timerReload[1][2];
-							}
-						}
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[1][2])>>MMU.timerMODE[1][2];
-							nds.old = MMU.timer[1][2];
-							MMU.timer[1][2] += nds.diff;
-							nds.timerCycle[1][2] += nds.diff << MMU.timerMODE[1][2];
-							nds.timerOver[1][2] = nds.old>MMU.timer[1][2];
-							if(nds.timerOver[1][2])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x10A) & 0x40)
-									NDS_makeARM7Int(5);
-								MMU.timer[1][2] = MMU.timerReload[1][2];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[1][2] = TRUE;
-					nds.timerCycle[1][2] = nds.cycles;
-				}
-			}
-			if(MMU.timerON[1][3])
-			{
-				if(MMU.timerRUN[1][3])
-				{
-					switch(MMU.timerMODE[1][3])
-					{
-					case 0xFFFF :
-						if(nds.timerOver[1][2])
-						{
-							++(MMU.timer[1][3]);
-							nds.timerOver[1][3] = !MMU.timer[1][3];
-							if (nds.timerOver[1][3])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x10E) & 0x40)
-									NDS_makeARM7Int(6);
-								MMU.timer[1][3] += MMU.timerReload[1][3];
-							}
-						}
-						break;
-					default :
-						{
-							nds.diff = (nds.cycles - nds.timerCycle[1][3])>>MMU.timerMODE[1][3];
-							nds.old = MMU.timer[1][3];
-							MMU.timer[1][3] += nds.diff;
-							nds.timerCycle[1][3] += nds.diff << MMU.timerMODE[1][3];
-							nds.timerOver[1][3] = nds.old>MMU.timer[1][3];
-							if(nds.timerOver[1][3])
-							{
-								if(T1ReadWord(MMU.ARM7_REG, 0x10E) & 0x40)
-									NDS_makeARM7Int(6);
-								MMU.timer[1][3] += MMU.timerReload[1][3];
-							}
-						}
-						break;
-					}
-				}
-				else
-				{
-					MMU.timerRUN[1][3] = TRUE;
-					nds.timerCycle[1][3] = nds.cycles;
-				}
-			}
-		}
+static void execHardware_hstart_irq()
+{
+	//this function very soon after the registers get updated to trigger IRQs
+	//this is necessary to fix "egokoro kyoushitsu" which idles waiting for vcount=192, which never happens due to a long vblank irq
+	//100% accurate emulation would require the read of VCOUNT to be in the pipeline already with the irq coming in behind it, thus 
+	//allowing the vcount to register as 192 occasionally (maybe about 1 out of 28 frames)
+	//the actual length of the delay is in execHardware() where the events are scheduled
+	sequencer.reschedule = true;
+	if(nds.VCount==192)
+	{
+		//when the vcount hits 192, vblank begins
+		execHardware_hstart_vblankStart();
+	}
 
-		if (MMU.CheckDMAs)
-		{
+	execHardware_hstart_vcount_irq();
+}
 
-			if((MMU.DMAing[0][0])&&(MMU.DMACycle[0][0]<=nds.cycles))
-			{
-				T1WriteLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*0), T1ReadLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*0)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[0][0])&(1<<30)) NDS_makeARM9Int(8);
-				MMU.DMAing[0][0] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(0+(0<<2)));
-			}
+static void execHardware_hstart()
+{
+	nds.VCount++;
 
-			if((MMU.DMAing[0][1])&&(MMU.DMACycle[0][1]<=nds.cycles))
-			{
-				T1WriteLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*1), T1ReadLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*1)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[0][1])&(1<<30)) NDS_makeARM9Int(9);
-				MMU.DMAing[0][1] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(1+(0<<2)));
-			}
+	//end of 3d vblank
+	//this should be 214, but we are going to be generous for games with tight timing
+	//they shouldnt be changing any textures at 262 but they might accidentally still be at 214
+	//so..
+	if((CommonSettings.rigorous_timing && nds.VCount==214) || (!CommonSettings.rigorous_timing && nds.VCount==262))
+	{
+		gfx3d_VBlankEndSignal(frameSkipper.ShouldSkip3D());
+	}
 
-			if((MMU.DMAing[0][2])&&(MMU.DMACycle[0][2]<=nds.cycles))
-			{
-				T1WriteLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*2), T1ReadLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*2)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[0][2])&(1<<30)) NDS_makeARM9Int(10);
-				MMU.DMAing[0][2] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(2+(0<<2)));
-			}
+	if(nds.VCount==263)
+	{
+		//when the vcount hits 263 it rolls over to 0
+		nds.VCount=0;
+	}
+	else if(nds.VCount==262)
+	{
+		//when the vcount hits 262, vblank ends (oam pre-renders by one scanline)
+		execHardware_hstart_vblankEnd();
+	}
+	else if(nds.VCount==192)
+	{
+		//turn on vblank status bit
+		T1WriteWord(MMU.ARM9_REG, 4, T1ReadWord(MMU.ARM9_REG, 4) | 1);
+		T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) | 1);
 
-			if((MMU.DMAing[0][3])&&(MMU.DMACycle[0][3]<=nds.cycles))
-			{
-				T1WriteLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*3), T1ReadLong(ARM9Mem.ARM9_REG, 0xB8 + (0xC*3)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[0][3])&(1<<30)) NDS_makeARM9Int(11);
-				MMU.DMAing[0][3] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(3+(0<<2)));
-			}
+		//check whether we'll need to fire vblank irqs
+		if(T1ReadWord(MMU.ARM9_REG, 4) & 0x8) MMU.reg_IF_pending[ARMCPU_ARM9] |= (1<<IRQ_BIT_LCD_VBLANK);
+		if(T1ReadWord(MMU.ARM7_REG, 4) & 0x8) MMU.reg_IF_pending[ARMCPU_ARM7] |= (1<<IRQ_BIT_LCD_VBLANK);
 
-			if((MMU.DMAing[1][0])&&(MMU.DMACycle[1][0]<=nds.cycles))
-			{
-				T1WriteLong(MMU.ARM7_REG, 0xB8 + (0xC*0), T1ReadLong(MMU.ARM7_REG, 0xB8 + (0xC*0)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[1][0])&(1<<30)) NDS_makeARM7Int(8);
-				MMU.DMAing[1][0] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(0+(1<<2)));
-			}
+		//this is important for the character select in Dragon Ball Kai - Ultimate Butouden
+		//it seems if you allow the 3d to begin before the vblank, then it will get interrupted and not complete.
+		//the game needs to pick up the gxstat reg busy as clear after it finishes processing vblank.
+		//therefore, this can't happen until sometime after vblank.
+		//devil survivor 2 will have screens get stuck if this is on any other scanline.
+		//obviously 192 is the right choice.
+		gfx3d_VBlankSignal();
+		//this isnt important for any known game, but it would be nice to prove it.
+		NDS_RescheduleGXFIFO(392*2);
+	}
 
-			if((MMU.DMAing[1][1])&&(MMU.DMACycle[1][1]<=nds.cycles))
-			{
-				T1WriteLong(MMU.ARM7_REG, 0xB8 + (0xC*1), T1ReadLong(MMU.ARM7_REG, 0xB8 + (0xC*1)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[1][1])&(1<<30)) NDS_makeARM7Int(9);
-				MMU.DMAing[1][1] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(1+(1<<2)));
-			}
+	//write the new vcount
+	T1WriteWord(MMU.ARM9_REG, 6, nds.VCount);
+	T1WriteWord(MMU.ARM9_REG, 0x1006, nds.VCount);
+	T1WriteWord(MMU.ARM7_REG, 6, nds.VCount);
+	T1WriteWord(MMU.ARM7_REG, 0x1006, nds.VCount);
 
-			if((MMU.DMAing[1][2])&&(MMU.DMACycle[1][2]<=nds.cycles))
-			{
-				T1WriteLong(MMU.ARM7_REG, 0xB8 + (0xC*2), T1ReadLong(MMU.ARM7_REG, 0xB8 + (0xC*2)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[1][2])&(1<<30)) NDS_makeARM7Int(10);
-				MMU.DMAing[1][2] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(2+(1<<2)));
-			}
+	//turn off hblank status bit
+	T1WriteWord(MMU.ARM9_REG, 4, T1ReadWord(MMU.ARM9_REG, 4) & 0xFFFD);
+	T1WriteWord(MMU.ARM7_REG, 4, T1ReadWord(MMU.ARM7_REG, 4) & 0xFFFD);
 
-			if((MMU.DMAing[1][3])&&(MMU.DMACycle[1][3]<=nds.cycles))
-			{
-				T1WriteLong(MMU.ARM7_REG, 0xB8 + (0xC*3), T1ReadLong(MMU.ARM7_REG, 0xB8 + (0xC*3)) & 0x7FFFFFFF);
-				if((MMU.DMACrt[1][3])&(1<<30)) NDS_makeARM7Int(11);
-				MMU.DMAing[1][3] = FALSE;
-				MMU.CheckDMAs &= ~(1<<(3+(1<<2)));
-			}
-		}
+	//handle vcount status
+	execHardware_hstart_vcount();
 
-		if(MMU.reg_IE[ARMCPU_ARM9]&(1<<21))
-			NDS_makeARM9Int(21);		// GX geometry
+	//trigger hstart dmas
+	triggerDma(EDMAMode_HStart);
 
-		if((MMU.reg_IF[0]&MMU.reg_IE[0]) && (MMU.reg_IME[0]))
-		{
-#ifdef GDB_STUB
-			if ( armcpu_flagIrq( &NDS_ARM9)) 
-#else
-			if ( armcpu_irqException(&NDS_ARM9))
+	if(nds.VCount<192)
+	{
+		//this is hacky.
+		//there is a corresponding hack in doDMA.
+		//it should be driven by a fifo (and generate just in time as the scanline is displayed)
+		//but that isnt even possible until we have some sort of sub-scanline timing.
+		//it may not be necessary.
+		triggerDma(EDMAMode_MemDisplay);
+	}
+}
+
+void NDS_Reschedule()
+{
+	IF_DEVELOPER(if(!sequencer.reschedule) DEBUG_statistics.sequencerExecutionCounters[0]++;);
+	sequencer.reschedule = true;
+}
+
+FORCEINLINE u32 _fast_min32(u32 a, u32 b, u32 c, u32 d)
+{
+	return ((( ((s32)(a-b)) >> (32-1)) & (c^d)) ^ d);
+}
+
+FORCEINLINE u64 _fast_min(u64 a, u64 b)
+{
+	//you might find that this is faster on a 64bit system; someone should try it
+	//http://aggregate.org/MAGIC/#Integer%20Selection
+	//u64 ret = (((((s64)(a-b)) >> (64-1)) & (a^b)) ^ b);
+	//assert(ret==min(a,b));
+	//return ret;	
+	
+	//but this ends up being the fastest on 32bits
+	return a<b?a:b;
+
+	//just for the record, I tried to do the 64bit math on a 32bit proc
+	//using sse2 and it was really slow
+	//__m128i __a; __a.m128i_u64[0] = a;
+	//__m128i __b; __b.m128i_u64[0] = b;
+	//__m128i xorval = _mm_xor_si128(__a,__b);
+	//__m128i temp = _mm_sub_epi64(__a,__b);
+	//temp.m128i_i64[0] >>= 63; //no 64bit shra in sse2, what a disappointment
+	//temp = _mm_and_si128(temp,xorval);
+	//temp = _mm_xor_si128(temp,__b);
+	//return temp.m128i_u64[0];
+}
+
+
+
+u64 Sequencer::findNext()
+{
+	//this one is always enabled so dont bother to check it
+	u64 next = dispcnt.next();
+
+	if(divider.isEnabled()) next = _fast_min(next,divider.next());
+	if(sqrtunit.isEnabled()) next = _fast_min(next,sqrtunit.next());
+	if(gxfifo.enabled) next = _fast_min(next,gxfifo.next());
+
+#ifdef EXPERIMENTAL_WIFI_COMM
+	next = _fast_min(next,wifi.next());
 #endif
-			{
-				nds.ARM9Cycle = nds.cycles;
-			}
-		}
 
-		if((MMU.reg_IF[1]&MMU.reg_IE[1]) && (MMU.reg_IME[1]))
-		{
-#ifdef GDB_STUB
-			if ( armcpu_flagIrq( &NDS_ARM7)) 
-#else
-			if ( armcpu_irqException(&NDS_ARM7))
-#endif
-			{
-				nds.ARM7Cycle = nds.cycles;
-			}
-		}
+#define test(X,Y) if(dma_##X##_##Y .isEnabled()) next = _fast_min(next,dma_##X##_##Y .next());
+	test(0,0); test(0,1); test(0,2); test(0,3);
+	test(1,0); test(1,1); test(1,2); test(1,3);
+#undef test
+#define test(X,Y) if(timer_##X##_##Y .enabled) next = _fast_min(next,timer_##X##_##Y .next());
+	test(0,0); test(0,1); test(0,2); test(0,3);
+	test(1,0); test(1,1); test(1,2); test(1,3);
+#undef test
 
-		} // if(!nds.sleeping)
-		else
+	return next;
+}
+
+void Sequencer::execHardware()
+{
+	if(dispcnt.isTriggered())
+	{
+
+		IF_DEVELOPER(DEBUG_statistics.sequencerExecutionCounters[1]++);
+
+		switch(dispcnt.param)
 		{
-			gpu_UpdateRender();
-			if((MMU.reg_IE[1] & MMU.reg_IF[1]) & (1<<22))
-			{
-				nds.sleeping = FALSE;
-			}
+		case ESI_DISPCNT_HStart:
+			execHardware_hstart();
+			//(used to be 3168)
+			//hstart is actually 8 dots before the visible drawing begins
+			//we're going to run 1 here and then run 7 in the next case
+			dispcnt.timestamp += 1*6*2;
+			dispcnt.param = ESI_DISPCNT_HStartIRQ;
+			break;
+		case ESI_DISPCNT_HStartIRQ:
+			execHardware_hstart_irq();
+			dispcnt.timestamp += 7*6*2;
+			dispcnt.param = ESI_DISPCNT_HDraw;
+			break;
+			
+		case ESI_DISPCNT_HDraw:
+			execHardware_hdraw();
+			//duration of non-blanking period is ~1606 clocks (gbatek agrees) [but says its different on arm7]
+			//im gonna call this 267 dots = 267*6=1602
+			//so, this event lasts 267 dots minus the 8 dot preroll
+			dispcnt.timestamp += (267-8)*6*2;
+			dispcnt.param = ESI_DISPCNT_HBlank;
+			break;
+
+		case ESI_DISPCNT_HBlank:
+			execHardware_hblank();
+			//(once this was 1092 or 1092/12=91 dots.)
+			//there are surely 355 dots per scanline, less 267 for non-blanking period. the rest is hblank and then after that is hstart
+			dispcnt.timestamp += (355-267)*6*2;
+			dispcnt.param = ESI_DISPCNT_HStart;
 			break;
 		}
 	}
 
+#ifdef EXPERIMENTAL_WIFI_COMM
+	if(wifi.isTriggered())
+	{
+		WIFI_usTrigger();
+		wifi.timestamp += kWifiCycles;
+	}
+#endif
+	
+	if(divider.isTriggered()) divider.exec();
+	if(sqrtunit.isTriggered()) sqrtunit.exec();
+	if(gxfifo.isTriggered()) gxfifo.exec();
+
+
+#define test(X,Y) if(dma_##X##_##Y .isTriggered()) dma_##X##_##Y .exec();
+	test(0,0); test(0,1); test(0,2); test(0,3);
+	test(1,0); test(1,1); test(1,2); test(1,3);
+#undef test
+#define test(X,Y) if(timer_##X##_##Y .enabled) if(timer_##X##_##Y .isTriggered()) timer_##X##_##Y .exec();
+	test(0,0); test(0,1); test(0,2); test(0,3);
+	test(1,0); test(1,1); test(1,2); test(1,3);
+#undef test
+}
+
+void execHardware_interrupts();
+
+static void saveUserInput(EMUFILE* os);
+static bool loadUserInput(EMUFILE* is, int version);
+
+void nds_savestate(EMUFILE* os)
+{
+	//version
+	write32le(3,os);
+
+	sequencer.save(os);
+
+	saveUserInput(os);
+
+	write32le(LidClosed,os);
+	write8le(countLid,os);
+}
+
+bool nds_loadstate(EMUFILE* is, int size)
+{
+	// this isn't part of the savestate loading logic, but
+	// don't skip the next frame after loading a savestate
+	frameSkipper.OmitSkip(true, true);
+
+	//read version
+	u32 version;
+	if(read32le(&version,is) != 1) return false;
+
+	if(version > 3) return false;
+
+	bool temp = true;
+	temp &= sequencer.load(is, version);
+	if(version <= 1 || !temp) return temp;
+	temp &= loadUserInput(is, version);
+
+	if(version < 3) return temp;
+
+	read32le(&LidClosed,is);
+	read8le(&countLid,is);
+
+	return temp;
+}
+
+FORCEINLINE void arm9log()
+{
+#ifdef LOG_ARM9
+	if(dolog)
+	{
+		char dasmbuf[4096];
+		if(NDS_ARM9.CPSR.bits.T)
+			des_thumb_instructions_set[((NDS_ARM9.instruction)>>6)&1023](NDS_ARM9.instruct_adr, NDS_ARM9.instruction, dasmbuf);
+		else
+			des_arm_instructions_set[INDEX(NDS_ARM9.instruction)](NDS_ARM9.instruct_adr, NDS_ARM9.instruction, dasmbuf);
+
+#ifdef LOG_TO_FILE
+		if (!fp_dis9) return;
+#ifdef LOG_TO_FILE_REGS
+		fprintf(fp_dis9, "\t\t;%05d:%03d %12lld\n\t\t;R0:%08X R1:%08X R2:%08X R3:%08X R4:%08X R5:%08X R6:%08X R7:%08X R8:%08X R9:%08X\n\t\t;R10:%08X R11:%08X R12:%08X R13:%08X R14:%08X R15:%08X| next %08X, N:%i Z:%i C:%i V:%i\n",
+			currFrameCounter, nds.VCount, nds_timer,
+			NDS_ARM9.R[0],  NDS_ARM9.R[1],  NDS_ARM9.R[2],  NDS_ARM9.R[3],  NDS_ARM9.R[4],  NDS_ARM9.R[5],  NDS_ARM9.R[6],  NDS_ARM9.R[7], 
+			NDS_ARM9.R[8],  NDS_ARM9.R[9],  NDS_ARM9.R[10],  NDS_ARM9.R[11],  NDS_ARM9.R[12],  NDS_ARM9.R[13],  NDS_ARM9.R[14],  NDS_ARM9.R[15],
+			NDS_ARM9.next_instruction, NDS_ARM9.CPSR.bits.N, NDS_ARM9.CPSR.bits.Z, NDS_ARM9.CPSR.bits.C, NDS_ARM9.CPSR.bits.V);
+#endif
+		fprintf(fp_dis9, "%s %08X\t%08X \t%s\n", NDS_ARM9.CPSR.bits.T?"THUMB":"ARM", NDS_ARM9.instruct_adr, NDS_ARM9.instruction, dasmbuf);
+		/*if (NDS_ARM9.instruction == 0)
+		{
+			dolog = false;
+			INFO("Disassembler is stopped\n");
+		}*/
+#else
+		printf("%05d:%03d %12lld 9:%08X %08X %-30s R00:%08X R01:%08X R02:%08X R03:%08X R04:%08X R05:%08X R06:%08X R07:%08X R08:%08X R09:%08X R10:%08X R11:%08X R12:%08X R13:%08X R14:%08X R15:%08X\n",
+			currFrameCounter, nds.VCount, nds_timer, 
+			NDS_ARM9.instruct_adr,NDS_ARM9.instruction, dasmbuf, 
+			NDS_ARM9.R[0],  NDS_ARM9.R[1],  NDS_ARM9.R[2],  NDS_ARM9.R[3],  NDS_ARM9.R[4],  NDS_ARM9.R[5],  NDS_ARM9.R[6],  NDS_ARM9.R[7], 
+			NDS_ARM9.R[8],  NDS_ARM9.R[9],  NDS_ARM9.R[10],  NDS_ARM9.R[11],  NDS_ARM9.R[12],  NDS_ARM9.R[13],  NDS_ARM9.R[14],  NDS_ARM9.R[15]);  
+#endif
+	}
+#endif
+}
+
+FORCEINLINE void arm7log()
+{
+#ifdef LOG_ARM7
+	if(dolog)
+	{
+		char dasmbuf[4096];
+		if(NDS_ARM7.CPSR.bits.T)
+			des_thumb_instructions_set[((NDS_ARM7.instruction)>>6)&1023](NDS_ARM7.instruct_adr, NDS_ARM7.instruction, dasmbuf);
+		else
+			des_arm_instructions_set[INDEX(NDS_ARM7.instruction)](NDS_ARM7.instruct_adr, NDS_ARM7.instruction, dasmbuf);
+#ifdef LOG_TO_FILE
+		if (!fp_dis7) return;
+#ifdef LOG_TO_FILE_REGS
+		fprintf(fp_dis7, "\t\t;%05d:%03d %12lld\n\t\t;R0:%08X R1:%08X R2:%08X R3:%08X R4:%08X R5:%08X R6:%08X R7:%08X R8:%08X R9:%08X\n\t\t;R10:%08X R11:%08X R12:%08X R13:%08X R14:%08X R15:%08X| next %08X, N:%i Z:%i C:%i V:%i\n",
+			currFrameCounter, nds.VCount, nds_timer, 
+			NDS_ARM7.R[0],  NDS_ARM7.R[1],  NDS_ARM7.R[2],  NDS_ARM7.R[3],  NDS_ARM7.R[4],  NDS_ARM7.R[5],  NDS_ARM7.R[6],  NDS_ARM7.R[7], 
+			NDS_ARM7.R[8],  NDS_ARM7.R[9],  NDS_ARM7.R[10],  NDS_ARM7.R[11],  NDS_ARM7.R[12],  NDS_ARM7.R[13],  NDS_ARM7.R[14],  NDS_ARM7.R[15],
+			NDS_ARM7.next_instruction, NDS_ARM7.CPSR.bits.N, NDS_ARM7.CPSR.bits.Z, NDS_ARM7.CPSR.bits.C, NDS_ARM7.CPSR.bits.V);
+#endif
+		fprintf(fp_dis7, "%s %08X\t%08X \t%s\n", NDS_ARM7.CPSR.bits.T?"THUMB":"ARM", NDS_ARM7.instruct_adr, NDS_ARM7.instruction, dasmbuf);
+		/*if (NDS_ARM7.instruction == 0)
+		{
+			dolog = false;
+			INFO("Disassembler is stopped\n");
+		}*/
+#else		
+		printf("%05d:%03d %12lld 7:%08X %08X %-30s R00:%08X R01:%08X R02:%08X R03:%08X R04:%08X R05:%08X R06:%08X R07:%08X R08:%08X R09:%08X R10:%08X R11:%08X R12:%08X R13:%08X R14:%08X R15:%08X\n",
+			currFrameCounter, nds.VCount, nds_timer, 
+			NDS_ARM7.instruct_adr,NDS_ARM7.instruction, dasmbuf, 
+			NDS_ARM7.R[0],  NDS_ARM7.R[1],  NDS_ARM7.R[2],  NDS_ARM7.R[3],  NDS_ARM7.R[4],  NDS_ARM7.R[5],  NDS_ARM7.R[6],  NDS_ARM7.R[7], 
+			NDS_ARM7.R[8],  NDS_ARM7.R[9],  NDS_ARM7.R[10],  NDS_ARM7.R[11],  NDS_ARM7.R[12],  NDS_ARM7.R[13],  NDS_ARM7.R[14],  NDS_ARM7.R[15]);
+#endif
+	}
+#endif
+}
+
+//these have not been tuned very well yet.
+static const int kMaxWork = 4000;
+static const int kIrqWait = 4000;
+
+
+template<bool doarm9, bool doarm7>
+static FORCEINLINE s32 minarmtime(s32 arm9, s32 arm7)
+{
+	if(doarm9)
+		if(doarm7)
+			return min(arm9,arm7);
+		else
+			return arm9;
+	else
+		return arm7;
+}
+
+#ifdef HAVE_JIT
+template<bool doarm9, bool doarm7, bool jit>
+#else
+template<bool doarm9, bool doarm7>
+#endif
+static /*donotinline*/ std::pair<s32,s32> armInnerLoop(
+	const u64 nds_timer_base, const s32 s32next, s32 arm9, s32 arm7)
+{
+	s32 timer = minarmtime<doarm9,doarm7>(arm9,arm7);
+	while(timer < s32next && !sequencer.reschedule && execute)
+	{
+		if(doarm9 && (!doarm7 || arm9 <= timer))
+		{
+			if(!NDS_ARM9.waitIRQ&&!nds.freezeBus)
+			{
+				arm9log();
+				debug();
+#ifdef HAVE_JIT
+				arm9 += armcpu_exec<ARMCPU_ARM9,jit>();
+#else
+				arm9 += armcpu_exec<ARMCPU_ARM9>();
+#endif
+				#ifdef DEVELOPER
+					nds_debug_continuing[0] = false;
+				#endif
+			}
+			else
+			{
+				s32 temp = arm9;
+				arm9 = min(s32next, arm9 + kIrqWait);
+				nds.idleCycles[0] += arm9-temp;
+				if (gxFIFO.size < 255) nds.freezeBus &= ~1;
+			}
+		}
+		if(doarm7 && (!doarm9 || arm7 <= timer))
+		{
+			if(!NDS_ARM7.waitIRQ&&!nds.freezeBus)
+			{
+				arm7log();
+#ifdef HAVE_JIT
+				arm7 += (armcpu_exec<ARMCPU_ARM7,jit>()<<1);
+#else
+				arm7 += (armcpu_exec<ARMCPU_ARM7>()<<1);
+#endif
+				#ifdef DEVELOPER
+					nds_debug_continuing[1] = false;
+				#endif
+			}
+			else
+			{
+				s32 temp = arm7;
+				arm7 = min(s32next, arm7 + kIrqWait);
+				nds.idleCycles[1] += arm7-temp;
+				if(arm7 == s32next)
+				{
+					nds_timer = nds_timer_base + minarmtime<doarm9,false>(arm9,arm7);
+#ifdef HAVE_JIT
+					return armInnerLoop<doarm9,false,jit>(nds_timer_base, s32next, arm9, arm7);
+#else
+					return armInnerLoop<doarm9,false>(nds_timer_base, s32next, arm9, arm7);
+#endif
+				}
+			}
+		}
+
+		timer = minarmtime<doarm9,doarm7>(arm9,arm7);
+		nds_timer = nds_timer_base + timer;
+	}
+
+	return std::make_pair(arm9, arm7);
+}
+
+void NDS_debug_break()
+{
+	NDS_ARM9.stalled = NDS_ARM7.stalled = 1;
+
+	//triggers an immediate exit from the cpu loop
+	NDS_Reschedule();
+}
+
+void NDS_debug_continue()
+{
+	NDS_ARM9.stalled = NDS_ARM7.stalled = 0;
+}
+
+void NDS_debug_step()
+{
+	NDS_debug_continue();
+	singleStep = true;
+}
+
+template<bool FORCE>
+void NDS_exec(s32 nb)
+{
+	#ifdef GDB_STUB
+	gdbstub_mutex_lock();
+	#endif
+
+	LagFrameFlag=1;
+
+	sequencer.nds_vblankEnded = false;
+
+	nds.cpuloopIterationCount = 0;
+
+	IF_DEVELOPER(for(int i=0;i<32;i++) DEBUG_statistics.sequencerExecutionCounters[i] = 0);
+
+	if(nds.sleeping)
+	{
+		//speculative code: if ANY irq happens, wake up the arm7.
+		//I think the arm7 program analyzes the system and may decide not to wake up
+		//if it is dissatisfied with the conditions
+		if((MMU.reg_IE[1] & MMU.gen_IF<1>()))
+		{
+			nds.sleeping = FALSE;
+		}
+	}
+	else
+	{
+		for(;;)
+		{
+			//trap the debug-stalled condition
+			#ifdef DEVELOPER
+				singleStep = false;
+				//(gdb stub doesnt yet know how to trigger these immediately by calling reschedule)
+				if ((NDS_ARM9.stalled || NDS_ARM7.stalled) && execute)
+				{
+					driver->EMU_DebugIdleEnter();
+					
+					while((NDS_ARM9.stalled || NDS_ARM7.stalled) && execute)
+					{
+					        #ifdef GDB_STUB
+					        gdbstub_mutex_unlock();
+					        #endif
+						driver->EMU_DebugIdleUpdate();
+					        #ifdef GDB_STUB
+					        gdbstub_mutex_lock();
+					        #endif
+						nds_debug_continuing[0] = nds_debug_continuing[1] = true;
+					}
+					
+					driver->EMU_DebugIdleWakeUp();
+				}
+			#endif
+
+			nds.cpuloopIterationCount++;
+			sequencer.execHardware();
+
+			//break out once per frame
+			if(sequencer.nds_vblankEnded) break;
+			//it should be benign to execute execHardware in the next frame,
+			//since there won't be anything for it to do (everything should be scheduled in the future)
+
+			//bail in case the system halted
+			if(!execute) break;
+
+			execHardware_interrupts();
+
+			//find next work unit:
+			u64 next = sequencer.findNext();
+			next = min(next,nds_timer+kMaxWork); //lets set an upper limit for now
+
+			//printf("%d\n",(next-nds_timer));
+
+			sequencer.reschedule = false;
+
+			//cast these down to 32bits so that things run faster on 32bit procs
+			u64 nds_timer_base = nds_timer;
+			s32 arm9 = (s32)(nds_arm9_timer-nds_timer);
+			s32 arm7 = (s32)(nds_arm7_timer-nds_timer);
+			s32 s32next = (s32)(next-nds_timer);
+
+			#ifdef DEVELOPER
+				if(singleStep)
+				{
+					s32next = 1;
+				}
+			#endif
+
+#ifdef HAVE_JIT
+			std::pair<s32,s32> arm9arm7 = CommonSettings.use_jit
+				? armInnerLoop<true,true,true>(nds_timer_base,s32next,arm9,arm7)
+				: armInnerLoop<true,true,false>(nds_timer_base,s32next,arm9,arm7);
+#else
+				std::pair<s32,s32> arm9arm7 = armInnerLoop<true,true>(nds_timer_base,s32next,arm9,arm7);
+#endif
+
+			#ifdef DEVELOPER
+				if(singleStep)
+				{
+					NDS_ARM9.stalled = NDS_ARM7.stalled = 1;
+				}
+			#endif
+
+			arm9 = arm9arm7.first;
+			arm7 = arm9arm7.second;
+			nds_arm7_timer = nds_timer_base+arm7;
+			nds_arm9_timer = nds_timer_base+arm9;
+
+#ifndef NDEBUG
+			//what we find here is dependent on the timing constants above
+			//if(nds_timer>next && (nds_timer-next)>22)
+			//	printf("curious. please report: over by %d\n",(int)(nds_timer-next));
+#endif
+
+			//if we were waiting for an irq, don't wait too long:
+			//let's re-analyze it after this hardware event (this rolls back a big burst of irq waiting which may have been interrupted by a resynch)
+			if(NDS_ARM9.waitIRQ)
+			{
+				nds.idleCycles[0] -= (s32)(nds_arm9_timer-nds_timer);
+				nds_arm9_timer = nds_timer;
+			}
+			if(NDS_ARM7.waitIRQ)
+			{
+				nds.idleCycles[1] -= (s32)(nds_arm7_timer-nds_timer);
+				nds_arm7_timer = nds_timer;
+			}
+		}
+	}
+
+	//DEBUG_statistics.printSequencerExecutionCounters();
+	//DEBUG_statistics.print();
+
+	//end of frame emulation housekeeping
 	if(LagFrameFlag)
 	{
 		lagframecounter++;
@@ -2464,8 +2042,551 @@ void NDS_exec(s32 nb)
 		lastLag = lagframecounter;
 		lagframecounter = 0;
 	}
-
 	currFrameCounter++;
+	DEBUG_Notify.NextFrame();
+	if(cheats) cheats->process(CHEAT_TYPE_INTERNAL);
+
+        #ifdef GDB_STUB
+        gdbstub_mutex_unlock();
+        #endif
+}
+
+template<int PROCNUM> static void execHardware_interrupts_core()
+{
+	u32 IF = MMU.gen_IF<PROCNUM>();
+	u32 IE = MMU.reg_IE[PROCNUM];
+	u32 masked = IF & IE;
+	if(ARMPROC.halt_IE_and_IF && masked)
+	{
+		ARMPROC.halt_IE_and_IF = FALSE;
+		ARMPROC.waitIRQ = FALSE;
+	}
+
+	if(masked && MMU.reg_IME[PROCNUM] && !ARMPROC.CPSR.bits.I)
+	{
+		//printf("Executing IRQ on procnum %d with IF = %08X and IE = %08X\n",PROCNUM,IF,IE);
+		armcpu_irqException(&ARMPROC);
+	}
+}
+
+void execHardware_interrupts()
+{
+	execHardware_interrupts_core<ARMCPU_ARM9>();
+	execHardware_interrupts_core<ARMCPU_ARM7>();
+}
+
+static void resetUserInput();
+
+static void PrepareBiosARM7()
+{
+	//begin with the bios unloaded
+	NDS_ARM7.BIOS_loaded = false;
+	memset(MMU.ARM7_BIOS, 0, sizeof(MMU.ARM7_BIOS));
+
+	if(CommonSettings.UseExtBIOS == true)
+	{
+		//read arm7 bios from inputfile and flag it if it succeeds
+		FILE *arm7inf = fopen(CommonSettings.ARM7BIOS,"rb");
+		if (arm7inf) 
+		{
+			if (fread(MMU.ARM7_BIOS,1,16384,arm7inf) == 16384)
+				NDS_ARM7.BIOS_loaded = true;
+			fclose(arm7inf);
+		}
+	}
+
+	//choose to use SWI emulation or routines from bios
+	if((CommonSettings.SWIFromBIOS) && (NDS_ARM7.BIOS_loaded))
+	{
+		NDS_ARM7.swi_tab = 0;
+
+		//if we used routines from bios, apply patches
+		if (CommonSettings.PatchSWI3)
+		{
+			//[3801] SUB R0, #1 -> [4770] BX LR
+			T1WriteWord(MMU.ARM7_BIOS,0x2F08, 0x4770);
+		}
+	} 
+	else 
+		NDS_ARM7.swi_tab = ARM_swi_tab[ARMCPU_ARM7];
+
+	if(NDS_ARM7.BIOS_loaded)
+	{
+		INFO("ARM7 BIOS load: %s.\n", NDS_ARM7.BIOS_loaded?"OK":"FAILED");
+	}
+	else
+	{
+		//fake bios content, critical to normal operations, since we dont have a real bios.
+
+		T1WriteLong(MMU.ARM7_BIOS, 0x0000, 0xEAFFFFFE); //B 00000000 (reset: infinite loop) (originally: 0xE25EF002 - SUBS PC, LR, #2  
+		T1WriteLong(MMU.ARM7_BIOS, 0x0004, 0xEAFFFFFE); //B 00000004 (undefined instruction: infinite loop)
+		T1WriteLong(MMU.ARM7_BIOS, 0x0008, 0xEAFFFFFE); //B 00000280 (SWI: infinite loop [since we will be HLEing the SWI routines])
+		T1WriteLong(MMU.ARM7_BIOS, 0x000C, 0xEAFFFFFE); //B 0000000C (prefetch abort: infinite loop)
+		T1WriteLong(MMU.ARM7_BIOS, 0x0010, 0xEAFFFFFE); //B 00000010 (data abort: infinite loop)
+		T1WriteLong(MMU.ARM7_BIOS, 0x0018, 0xEA000000); //B 00000020 (IRQ: branch to handler)
+		T1WriteLong(MMU.ARM7_BIOS, 0x001C, 0xEAFFFFFE); //B 0000001C (FIQ vector: infinite loop)
+		//IRQ handler
+		T1WriteLong(MMU.ARM7_BIOS, 0x0020, 0xE92D500F); //STMDB SP!, {R0-R3,R12,LR}
+		T1WriteLong(MMU.ARM7_BIOS, 0x0024, 0xE3A00301); //MOV R0, #4000000
+		T1WriteLong(MMU.ARM7_BIOS, 0x0028, 0xE28FE000); //ADD LR, PC, #0
+		T1WriteLong(MMU.ARM7_BIOS, 0x002C, 0xE510F004); //LDR PC, [R0, -#4]
+		T1WriteLong(MMU.ARM7_BIOS, 0x0030, 0xE8BD500F); //LDMIA SP!, {R0-R3,R12,LR}
+		T1WriteLong(MMU.ARM7_BIOS, 0x0034, 0xE25EF004); //SUBS PC, LR, #4
+	}
+}
+
+static void PrepareBiosARM9()
+{
+	//begin with the bios unloaded
+	memset(MMU.ARM9_BIOS, 0, sizeof(MMU.ARM9_BIOS));
+	NDS_ARM9.BIOS_loaded = false;
+
+	if(CommonSettings.UseExtBIOS == true)
+	{
+		//read arm9 bios from inputfile and flag it if it succeeds
+		FILE* arm9inf = fopen(CommonSettings.ARM9BIOS,"rb");
+		if (arm9inf) 
+		{
+			if (fread(MMU.ARM9_BIOS,1,4096,arm9inf) == 4096) 
+				NDS_ARM9.BIOS_loaded = true;
+			fclose(arm9inf);
+		}
+	}
+
+	//choose to use SWI emulation or routines from bios
+	if((CommonSettings.SWIFromBIOS) && (NDS_ARM9.BIOS_loaded))
+	{
+		NDS_ARM9.swi_tab = 0;
+		
+		//if we used routines from bios, apply patches
+		//[3801] SUB R0, #1 -> [4770] BX LR
+		if (CommonSettings.PatchSWI3)
+			T1WriteWord(MMU.ARM9_BIOS, 0x07CC, 0x4770);
+	}
+	else NDS_ARM9.swi_tab = ARM_swi_tab[ARMCPU_ARM9];
+
+	if(NDS_ARM9.BIOS_loaded) 
+	{
+		INFO("ARM9 BIOS load: %s.\n", NDS_ARM9.BIOS_loaded?"OK":"FAILED");
+	} 
+	else 
+	{
+		//fake bios content, critical to normal operations, since we dont have a real bios.
+		//it'd be cool if we could write this in some kind of assembly language, inline or otherwise, without some bulky dependencies
+		//perhaps we could build it with devkitarm? but thats bulky (offline) dependencies, to be sure..
+
+		//reminder: bios chains data abort to fast irq
+
+		//exception vectors:
+		T1WriteLong(MMU.ARM9_BIOS, 0x0000, 0xEAFFFFFE);		// (infinite loop for) Reset !!!
+		//T1WriteLong(MMU.ARM9_BIOS, 0x0004, 0xEAFFFFFE);		// (infinite loop for) Undefined instruction
+		T1WriteLong(MMU.ARM9_BIOS, 0x0004, 0xEA000004);		// Undefined instruction -> Fast IRQ (just guessing)
+		T1WriteLong(MMU.ARM9_BIOS, 0x0008, 0xEA00009C);		// SWI -> ?????
+		T1WriteLong(MMU.ARM9_BIOS, 0x000C, 0xEAFFFFFE);		// (infinite loop for) Prefetch Abort
+		T1WriteLong(MMU.ARM9_BIOS, 0x0010, 0xEA000001);		// Data Abort -> Fast IRQ
+		T1WriteLong(MMU.ARM9_BIOS, 0x0014, 0x00000000);		// Reserved
+		T1WriteLong(MMU.ARM9_BIOS, 0x0018, 0xEA000095);		// Normal IRQ -> 0x0274
+		T1WriteLong(MMU.ARM9_BIOS, 0x001C, 0xEA00009D);		// Fast IRQ -> 0x0298
+
+		//copy the logo content into the bios - Pokemon Platinum uses this in Pal Park trade
+		//it compares the logo from the arm9 bios to the logo in the GBA header.
+		//NOTE: in the unlikely event that the valid header is missing from the gameInfo, we'd be doing wrong here.
+		//      however, its nice not to have the logo embedded here. 
+		//      TODO - take a CRC of the logo, check vs logoCRC16, and a hardcoded value, to make sure all is in order--report error if not
+		memcpy(&MMU.ARM9_BIOS[0x20], &gameInfo.header.logo[0], 0x9C);
+		T1WriteWord(MMU.ARM9_BIOS, 0x20 + 0x9C,  gameInfo.header.logoCRC16);
+		//... and with that we are at 0xBC:
+
+		//(now what goes in this gap?? nothing we need, i guess)
+
+		//IRQ handler: get dtcm address and jump to a vector in it
+		T1WriteLong(MMU.ARM9_BIOS, 0x0274, 0xE92D500F); //STMDB SP!, {R0-R3,R12,LR} 
+		T1WriteLong(MMU.ARM9_BIOS, 0x0278, 0xEE190F11); //MRC CP15, 0, R0, CR9, CR1, 0
+		T1WriteLong(MMU.ARM9_BIOS, 0x027C, 0xE1A00620); //MOV R0, R0, LSR #C
+		T1WriteLong(MMU.ARM9_BIOS, 0x0280, 0xE1A00600); //MOV R0, R0, LSL #C 
+		T1WriteLong(MMU.ARM9_BIOS, 0x0284, 0xE2800C40); //ADD R0, R0, #4000
+		T1WriteLong(MMU.ARM9_BIOS, 0x0288, 0xE28FE000); //ADD LR, PC, #0   
+		T1WriteLong(MMU.ARM9_BIOS, 0x028C, 0xE510F004); //LDR PC, [R0, -#4] 
+
+		//????
+		T1WriteLong(MMU.ARM9_BIOS, 0x0290, 0xE8BD500F); //LDMIA SP!, {R0-R3,R12,LR}
+		T1WriteLong(MMU.ARM9_BIOS, 0x0294, 0xE25EF004); //SUBS PC, LR, #4
+
+		//-------
+		//FIQ and abort exception handler
+		//TODO - this code is copied from the bios. refactor it
+		//friendly reminder: to calculate an immediate offset: encoded = (desired_address-cur_address-8)
+
+		T1WriteLong(MMU.ARM9_BIOS, 0x0298, 0xE10FD000); //MRS SP, CPSR  
+		T1WriteLong(MMU.ARM9_BIOS, 0x029C, 0xE38DD0C0); //ORR SP, SP, #C0
+		
+		T1WriteLong(MMU.ARM9_BIOS, 0x02A0, 0xE12FF00D); //MSR CPSR_fsxc, SP
+		T1WriteLong(MMU.ARM9_BIOS, 0x02A4, 0xE59FD000 | (0x2D4-0x2A4-8)); //LDR SP, [FFFF02D4]
+		T1WriteLong(MMU.ARM9_BIOS, 0x02A8, 0xE28DD001); //ADD SP, SP, #1   
+		T1WriteLong(MMU.ARM9_BIOS, 0x02AC, 0xE92D5000); //STMDB SP!, {R12,LR}
+		
+		T1WriteLong(MMU.ARM9_BIOS, 0x02B0, 0xE14FE000); //MRS LR, SPSR
+		T1WriteLong(MMU.ARM9_BIOS, 0x02B4, 0xEE11CF10); //MRC CP15, 0, R12, CR1, CR0, 0
+		T1WriteLong(MMU.ARM9_BIOS, 0x02B8, 0xE92D5000); //STMDB SP!, {R12,LR}
+		T1WriteLong(MMU.ARM9_BIOS, 0x02BC, 0xE3CCC001); //BIC R12, R12, #1
+
+		T1WriteLong(MMU.ARM9_BIOS, 0x02C0, 0xEE01CF10); //MCR CP15, 0, R12, CR1, CR0, 0
+		T1WriteLong(MMU.ARM9_BIOS, 0x02C4, 0xE3CDC001); //BIC R12, SP, #1    
+		T1WriteLong(MMU.ARM9_BIOS, 0x02C8, 0xE59CC010); //LDR R12, [R12, #10] 
+		T1WriteLong(MMU.ARM9_BIOS, 0x02CC, 0xE35C0000); //CMP R12, #0  
+
+		T1WriteLong(MMU.ARM9_BIOS, 0x02D0, 0x112FFF3C); //BLXNE R12    
+		T1WriteLong(MMU.ARM9_BIOS, 0x02D4, 0x027FFD9C); //0x027FFD9C  
+		//---------
+	}
+}
+
+static void JumbleMemory()
+{
+	//put random garbage in vram for homebrew games, to help mimic the situation where libnds does not clear out junk
+	//which the card's launcher may or may not have left behind
+	//analysis:
+  //1. retail games dont clear TCM, so why should we jumble it and expect homebrew to clear it?
+  //2. some retail games _dont boot_ if main memory is jumbled. wha...?
+  //3. clearing this is not as useful as tracking uninitialized reads in dev+ builds
+  //4. the vram clearing causes lots of graphical corruptions in badly coded homebrews. this reduces compatibility substantially
+  //conclusion: disable it for now and bring it back as an option
+	//if(gameInfo.isHomebrew)
+	//{
+	//	u32 w=100000,x=99,y=117,z=19382173;
+	//	CTASSERT(sizeof(MMU.ARM9_LCD) < sizeof(MMU.MAIN_MEM));
+	//	CTASSERT(sizeof(MMU.ARM9_VMEM) < sizeof(MMU.MAIN_MEM));
+	//	CTASSERT(sizeof(MMU.ARM9_ITCM) < sizeof(MMU.MAIN_MEM));
+	//	CTASSERT(sizeof(MMU.ARM9_DTCM) < sizeof(MMU.MAIN_MEM));
+	//	for(int i=0;i<sizeof(MMU.MAIN_MEM);i++)
+	//	{
+	//		u32 t= (x^(x<<11)); 
+	//		x=y;
+	//		y=z; 
+	//		z=w;
+	//		t = (w= (w^(w>>19))^(t^(t>>8)));
+	//		//MMU.MAIN_MEM[i] = t;
+	//		if (i<sizeof(MMU.ARM9_LCD)) MMU.ARM9_LCD[i] = t;
+	//		if (i<sizeof(MMU.ARM9_VMEM)) MMU.ARM9_VMEM[i] = t;
+	//		//if (i<sizeof(MMU.ARM9_ITCM)) MMU.ARM9_ITCM[i] = t;
+	//		//if (i<sizeof(MMU.ARM9_DTCM)) MMU.ARM9_DTCM[i] = t;
+	//	}
+	//}
+}
+
+static void PrepareLogfiles()
+{
+#ifdef LOG_ARM7
+	if (fp_dis7 != NULL) 
+	{
+		fclose(fp_dis7);
+		fp_dis7 = NULL;
+	}
+	fp_dis7 = fopen("D:\\desmume_dis7.asm", "w");
+#endif
+
+#ifdef LOG_ARM9
+	if (fp_dis9 != NULL) 
+	{
+		fclose(fp_dis9);
+		fp_dis9 = NULL;
+	}
+	fp_dis9 = fopen("D:\\desmume_dis9.asm", "w");
+#endif
+}
+
+bool NDS_LegitBoot()
+{
+	#ifdef HAVE_JIT
+		//hack for firmware boot in JIT mode.
+		//we know that it takes certain jit parameters to successfully boot the firmware.
+		//CRAZYMAX: is it safe to accept anything smaller than 12?
+		CommonSettings.jit_max_block_size = std::min(CommonSettings.jit_max_block_size,12U);
+	#endif
+
+	//partially clobber the loaded firmware with the user settings from DFC
+	firmware->loadSettings();
+
+	//since firmware only boots encrypted roms, we have to make sure it's encrypted first
+	//this has not been validated on big endian systems. it almost positively doesn't work.
+	if (gameInfo.header.CRC16 != 0)
+		EncryptSecureArea((u8*)&gameInfo.header, (u8*)gameInfo.secureArea);
+
+	//boot processors from their bios entrypoints
+	armcpu_init(&NDS_ARM7, 0x00000000);
+	armcpu_init(&NDS_ARM9, 0xFFFF0000);
+
+	return true;
+}
+
+//the fake firmware boot-up process
+bool NDS_FakeBoot()
+{
+	NDS_header * header = NDS_getROMHeader();
+
+	//DEBUG_reset();
+
+	if (!header) return false;
+
+	nds.isFakeBooted = true;
+
+	//since we're bypassing the code to decrypt the secure area, we need to make sure its decrypted first
+	//this has not been validated on big endian systems. it almost positively doesn't work.
+	if (gameInfo.header.CRC16 != 0)
+	{
+		bool okRom = DecryptSecureArea((u8*)&gameInfo.header, (u8*)gameInfo.secureArea);
+
+		if(!okRom) {
+			printf("Specified file is not a valid rom\n");
+			return false;
+		}
+	}
+
+	//bios (or firmware) sets this default, which is generally not important for retail games but some homebrews are depending on
+	_MMU_write08<ARMCPU_ARM9>(REG_WRAMCNT,3);
+
+	//EDIT - whats this firmware and how is it relating to the dummy firmware below
+	//how do these even get used? what is the purpose of unpack and why is it not used by the firmware boot process?
+	if (CommonSettings.UseExtFirmware && firmware->loaded())
+	{
+		firmware->unpack();
+		firmware->loadSettings();
+	}
+
+	// Create the dummy firmware
+	//EDIT - whats dummy firmware and how is relating to the above?
+	//it seems to be emplacing basic firmware data into MMU.fw.data
+	NDS_CreateDummyFirmware(&CommonSettings.fw_config);
+	
+	//firmware loads the game card arm9 and arm7 programs as specified in rom header
+	{
+		bool hasSecureArea = ((gameInfo.romType == ROM_NDS) && (gameInfo.header.CRC16 != 0));
+		//copy the arm9 program to the address specified by rom header
+		u32 src = header->ARM9src;
+		u32 dst = header->ARM9cpy;
+		for(u32 i = 0; i < header->ARM9binSize; i+=4)
+		{
+			u32 tmp = (hasSecureArea && ((src >= 0x4000) && (src < 0x8000)))?LE_TO_LOCAL_32(*(u32*)(gameInfo.secureArea + (src - 0x4000))):gameInfo.readROM(src);
+
+			_MMU_write32<ARMCPU_ARM9>(dst, tmp);
+
+			dst += 4;
+			src += 4;
+		}
+
+		//copy the arm7 program to the address specified by rom header
+		src = header->ARM7src;
+		dst = header->ARM7cpy;
+		for(u32 i = 0; i < header->ARM7binSize; i+=4)
+		{
+			_MMU_write32<ARMCPU_ARM7>(dst, gameInfo.readROM(src));
+
+			dst += 4;
+			src += 4;
+		}
+	}
+	
+	//bios does this (thats weird, though. shouldnt it get changed when the card is swapped in the firmware menu?
+	//right now our firmware menu isnt detecting any change to the card.
+	//are some games depending on it being written here? please document.
+	//_MMU_write16<ARMCPU_ARM9>(0x027FF808, T1ReadWord(MMU.CART_ROM, 0x15E));
+
+	//firmware sets up a copy of the firmware user settings in memory.
+	//TBD - this code is really clunky
+	//it seems to be copying the MMU.fw.data data into RAM in the user memory stash locations
+	u8 temp_buffer[NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT];
+	if ( copy_firmware_user_data( temp_buffer, MMU.fw.data)) {
+		for ( int fw_index = 0; fw_index < NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT; fw_index++)
+			_MMU_write08<ARMCPU_ARM9>(0x027FFC80 + fw_index, temp_buffer[fw_index]);
+	}
+
+	//something copies the whole header to Main RAM 0x27FFE00 on startup. (http://nocash.emubase.de/gbatek.htm#dscartridgeheader)
+	//once upon a time this copied 0x90 more. this was thought to be wrong, and changed.
+	if(nds.Is_DSI())
+	{
+		//dsi needs this copied later in memory. there are probably a number of things that  get copied to a later location in memory.. thats where the NDS consoles tend to stash stuff.
+		for (int i = 0; i < (0x170); i+=4)
+			_MMU_write32<ARMCPU_ARM9>(0x027FFE00 + i, gameInfo.readROM(i));
+	}
+	else
+	{
+		for (int i = 0; i < (0x170); i+=4)
+			_MMU_write32<ARMCPU_ARM9>(0x027FFE00 + i, gameInfo.readROM(i));
+	}
+
+	//the firmware will be booting to these entrypoint addresses via BX (well, the arm9 at least; is unverified for the arm7)
+	armcpu_init(&NDS_ARM7, header->ARM7exe);
+	armcpu_init(&NDS_ARM9, header->ARM9exe);
+
+	//firmware sets REG_POSTFLG to the value indicating post-firmware status
+	MMU.ARM9_REG[0x300] = 1;
+	MMU.ARM7_REG[0x300] = 1;
+
+	//firmware makes system think it's booted from card -- EXTREMELY IMPORTANT!!! This is actually checked by some things. (which things?) Thanks to cReDiAr
+	_MMU_write08<ARMCPU_ARM7>(0x02FFFC40,0x1); //<zero> removed redundant write to ARM9, this is going to shared main memory. But one has to wonder why r3478 was made which corrected a typo resulting in only ARMCPU_ARM7 getting used.
+
+	//the chipId is read several times
+	//for some reason, each of those reads get stored here.
+	_MMU_write32<ARMCPU_ARM7>(0x027FF800, gameInfo.chipID);		//1st chipId
+	_MMU_write32<ARMCPU_ARM7>(0x027FF804, gameInfo.chipID);		//2nd (secure) chipId
+	_MMU_write32<ARMCPU_ARM7>(0x027FFC00, gameInfo.chipID);		//3rd (secure) chipId
+	
+	// Write the header checksum to memory
+	_MMU_write16<ARMCPU_ARM9>(0x027FF808, gameInfo.header.headerCRC16);
+
+	//bitbox 4k demo is so stripped down it relies on default stack values
+	//otherwise the arm7 will crash before making a sound
+	//(these according to gbatek softreset bios docs)
+	NDS_ARM7.R13_svc = 0x0380FFDC;
+	NDS_ARM7.R13_irq = 0x0380FFB0;
+	NDS_ARM7.R13_usr = 0x0380FF00;
+	NDS_ARM7.R[13] = NDS_ARM7.R13_usr;
+	//and let's set these for the arm9 while we're at it, though we have no proof
+	NDS_ARM9.R13_svc = 0x00803FC0;
+	NDS_ARM9.R13_irq = 0x00803FA0;
+	NDS_ARM9.R13_usr = 0x00803EC0;
+	NDS_ARM9.R13_abt = NDS_ARM9.R13_usr; //????? 
+	//I think it is wrong to take gbatek's "SYS" and put it in USR--maybe USR doesnt matter. 
+	//i think SYS is all the misc modes. please verify by setting nonsensical stack values for USR here
+	NDS_ARM9.R[13] = NDS_ARM9.R13_usr;
+	//n.b.: im not sure about all these, I dont know enough about arm9 svc/irq/etc modes
+	//and how theyre named in desmume to match them up correctly. i just guessed.
+
+	//--------------------------------
+	//setup the homebrew argv
+	//this is useful for nitrofs apps which are emulating themselves via cflash
+	//struct __argv {
+	//	int argvMagic;		//!< argv magic number, set to 0x5f617267 ('_arg') if valid 
+	//	char *commandLine;	//!< base address of command line, set of null terminated strings
+	//	int length;			//!< total length of command line
+	//	int argc;			//!< internal use, number of arguments
+	//	char **argv;		//!< internal use, argv pointer
+	//};
+	std::string rompath = "fat:/" + path.RomName;
+	const u32 kCommandline = 0x027E0000;
+	//const u32 kCommandline = 0x027FFF84;
+
+	//homebrew-related stuff.
+	//its safe to put things in this position.. apparently nothing important is here.
+	//however, some games could be checking them as an anti-desmume measure, so we might have to control it with slot-1 settings to suggest booting a homebrew app
+	//perhaps we could automatically boot homebrew to an R4-like device.
+	_MMU_write32<ARMCPU_ARM9>(0x02FFFE70, 0x5f617267);
+	_MMU_write32<ARMCPU_ARM9>(0x02FFFE74, kCommandline); //(commandline starts here)
+	_MMU_write32<ARMCPU_ARM9>(0x02FFFE78, rompath.size()+1);
+	//0x027FFF7C (argc)
+	//0x027FFF80 (argv)
+	for(size_t i=0;i<rompath.size();i++)
+		_MMU_write08<ARMCPU_ARM9>(kCommandline+i, rompath[i]);
+	_MMU_write08<ARMCPU_ARM9>(kCommandline+rompath.size(), 0);
+	//--------------------------------
+
+	//Call the card post_fakeboot hook to perform additional initialization
+	slot1_device->post_fakeboot(ARMCPU_ARM9);
+	slot1_device->post_fakeboot(ARMCPU_ARM7);
+
+	delete header;
+	return true;
+}
+
+bool _HACK_DONT_STOPMOVIE = false;
+void NDS_Reset()
+{
+	PrepareLogfiles();
+
+	if(movieMode != MOVIEMODE_INACTIVE && !_HACK_DONT_STOPMOVIE)
+		movie_reset_command = true;
+
+	if(movieMode == MOVIEMODE_INACTIVE) {
+		currFrameCounter = 0;
+		lagframecounter = 0;
+		LagFrameFlag = 0;
+		lastLag = 0;
+		TotalLagFrames = 0;
+	}
+
+	resetUserInput();
+
+	
+	singleStep = false;
+	nds_debug_continuing[0] = nds_debug_continuing[1] = false;
+	nds.sleeping = FALSE;
+	nds.cardEjected = FALSE;
+	nds.freezeBus = 0;
+	nds.power1.lcd = nds.power1.gpuMain = nds.power1.gfx3d_render = nds.power1.gfx3d_geometry = nds.power1.gpuSub = nds.power1.dispswap = 1;
+	nds.power2.speakers = 1;
+	nds.power2.wifi = 0;
+	nds.wifiCycle = 0;
+	memset(nds.timerCycle, 0, sizeof(u64) * 2 * 4);
+	nds.old = 0;
+	nds.scr_touchX = nds.scr_touchY = nds.adc_touchX = nds.adc_touchY = 0;
+	nds.isTouch = 0;
+	nds.isFakeBooted = false;
+	nds.paddle = 0;
+	nds.ConsoleType = CommonSettings.ConsoleType;
+	nds._DebugConsole = CommonSettings.DebugConsole;
+	nds.ensataEmulation = CommonSettings.EnsataEmulation;
+	nds.stylusJitter = CommonSettings.StylusJitter;
+	nds.ensataHandshake = ENSATA_HANDSHAKE_none;
+	nds.ensataIpcSyncCounter = 0;
+	nds_timer = 0;
+	nds_arm9_timer = 0;
+	nds_arm7_timer = 0;
+	LidClosed = FALSE;
+	countLid = 0;
+
+	MMU_Reset();
+	SetupMMU(nds.Is_DebugConsole(),nds.Is_DSI());
+	JumbleMemory();
+
+	#ifdef HAVE_JIT
+		arm_jit_reset(CommonSettings.use_jit);
+	#endif
+
+
+	//initialize CP15 specially for this platform
+	//TODO - how much of this is necessary for firmware boot?
+	//(only ARM9 has CP15)
+	reconstruct(&cp15);
+	MMU.ARM9_RW_MODE = BIT7(cp15.ctrl);
+	NDS_ARM9.intVector = 0xFFFF0000 * (BIT13(cp15.ctrl));
+	NDS_ARM9.LDTBit = !BIT15(cp15.ctrl); //TBit
+
+	PrepareBiosARM7();
+	PrepareBiosARM9();
+
+	if (firmware)
+	{
+		delete firmware;
+		firmware = NULL;
+	}
+
+	firmware = new CFIRMWARE();
+	firmware->load();
+
+	//we will allow a proper firmware boot, if:
+	//1. we have the ARM7 and ARM9 bioses (its doubtful that our HLE bios implement the necessary functions)
+	//2. firmware is available
+	//3. user has requested booting from firmware
+	bool canBootFromFirmware = (NDS_ARM7.BIOS_loaded && NDS_ARM9.BIOS_loaded && CommonSettings.BootFromFirmware && firmware->loaded());
+	bool bootResult = false;
+	if(canBootFromFirmware)
+		bootResult = NDS_LegitBoot();
+	else
+		bootResult = NDS_FakeBoot();
+
+	// Init calibration info
+	memcpy(&TSCal, firmware->getTouchCalibrate(), sizeof(TSCalInfo));
+
+	GPU->Reset();
+
+	WIFI_Reset();
+	memcpy(FW_Mac, (MMU.fw.data + 0x36), 6);
+
+	SPU_DeInit();
+	SPU_ReInit(!canBootFromFirmware && bootResult);
+
+	//this needs to happen last, pretty much, since it establishes the correct scheduling state based on all of the above initialization
+	initSchedule();
 }
 
 static std::string MakeInputDisplayString(u16 pad, const std::string* Buttons, int count) {
@@ -2489,139 +2610,276 @@ static std::string MakeInputDisplayString(u16 pad, u16 padExt) {
     return s;
 }
 
+
+buttonstruct<bool> Turbo;
+buttonstruct<int> TurboTime;
+buttonstruct<bool> AutoHold;
+
 void ClearAutoHold(void) {
 	
-	for (int i=0; i < 12; i++) {
-		AutoHold.hold(i)=false;
+	for (u32 i=0; i < ARRAY_SIZE(AutoHold.array); i++) {
+		AutoHold.array[i]=false;
 	}
 }
 
-void NDS_setPadFromMovie(u16 pad)
+//convert a 12.4 screen coordinate to an ADC value.
+//the desmume host system will track the screen coordinate, but the hardware should be receiving the raw ADC values.
+//so we'll need to use this to simulate the ADC values corresponding to the desired screen coords, based on the current TSC calibrations
+u16 NDS_getADCTouchPosX(int scrX_lsl4)
 {
-#define FIX(b,n) (((pad>>n)&1)!=0)
-	NDS_setPad(
-		FIX(pad,12), //R
-		FIX(pad,11), //L
-		FIX(pad,10), //D
-		FIX(pad,9), //U 
-		FIX(pad,7), //Select
-		FIX(pad,8), //Start
-		FIX(pad,6), //B
-		FIX(pad,5), //A
-		FIX(pad,4), //Y
-		FIX(pad,3), //X
-		FIX(pad,2),
-		FIX(pad,1),
-		FIX(pad,0),
-		movie_lid
-		);
-#undef FIX
-
+	scrX_lsl4 >>= 4;
+	int rv = ((scrX_lsl4 - TSCal.scr.x1 + 1) * TSCal.adc.width) / TSCal.scr.width + TSCal.adc.x1;
+	rv = min(0xFFF, max(0, rv));
+	return (u16)(rv);
+}
+u16 NDS_getADCTouchPosY(int scrY_lsl4)
+{
+	scrY_lsl4 >>= 4;
+	int rv = ((scrY_lsl4 - TSCal.scr.y1 + 1) * TSCal.adc.height) / TSCal.scr.height + TSCal.adc.y1;
+	rv = min(0xFFF, max(0, rv));
+	return (u16)(rv);
 }
 
-turbo Turbo;
-turbotime TurboTime;
+static UserInput rawUserInput = {}; // requested input, generally what the user is physically pressing
+static UserInput intermediateUserInput = {}; // intermediate buffer for modifications (seperated from finalUserInput for safety reasons)
+static UserInput finalUserInput = {}; // what gets sent to the game and possibly recorded
+bool validToProcessInput = false;
 
-static void SetTurbo(bool (&pad) [12]) {
-
-	bool turbo[4] = {true, false, true, false};
-	bool currentbutton;
-
-	for (int i=0; i < 12; i++) {
-		currentbutton=Turbo.button(i);
-
-		if(currentbutton) {
-			pad[i]=turbo[TurboTime.time(i)-1];
-			
-			if(TurboTime.time(i) >= (int)ARRAY_SIZE(turbo))
-				TurboTime.time(i)=0;
-		}
-		else
-			TurboTime.time(i)=0; //reset timer if the button isn't pressed
-	}
-	for (int i=0; i<12; i++)
-		TurboTime.time(i)++;
+const UserInput& NDS_getRawUserInput()
+{
+	return rawUserInput;
+}
+UserInput& NDS_getProcessingUserInput()
+{
+	assert(validToProcessInput);
+	return intermediateUserInput;
+}
+bool NDS_isProcessingUserInput()
+{
+	return validToProcessInput;
+}
+const UserInput& NDS_getFinalUserInput()
+{
+	return finalUserInput;
 }
 
-autohold AutoHold;
+
+static void saveUserInput(EMUFILE* os, UserInput& input)
+{
+	os->fwrite((const char*)input.buttons.array, 14);
+	writebool(input.touch.isTouch, os);
+	write16le(input.touch.touchX, os);
+	write16le(input.touch.touchY, os);
+	write32le(input.mic.micButtonPressed, os);
+}
+static bool loadUserInput(EMUFILE* is, UserInput& input, int version)
+{
+	is->fread((char*)input.buttons.array, 14);
+	readbool(&input.touch.isTouch, is);
+	read16le(&input.touch.touchX, is);
+	read16le(&input.touch.touchY, is);
+	read32le(&input.mic.micButtonPressed, is);
+	return true;
+}
+static void resetUserInput(UserInput& input)
+{
+	memset(&input, 0, sizeof(UserInput));
+}
+// (userinput is kind of a misnomer, e.g. finalUserInput has to mirror nds.pad, nds.touchX, etc.)
+static void saveUserInput(EMUFILE* os)
+{
+	saveUserInput(os, finalUserInput);
+	saveUserInput(os, intermediateUserInput); // saved in case a savestate is made during input processing (which Lua could do if nothing else)
+	writebool(validToProcessInput, os);
+	for(int i = 0; i < 14; i++)
+		write32le(TurboTime.array[i], os); // saved to make autofire more tolerable to use with re-recording
+}
+static bool loadUserInput(EMUFILE* is, int version)
+{
+	bool rv = true;
+	rv &= loadUserInput(is, finalUserInput, version);
+	rv &= loadUserInput(is, intermediateUserInput, version);
+	readbool(&validToProcessInput, is);
+	for(int i = 0; i < 14; i++)
+		read32le((u32*)&TurboTime.array[i], is);
+	return rv;
+}
+static void resetUserInput()
+{
+	resetUserInput(finalUserInput);
+	resetUserInput(intermediateUserInput);
+}
+
+static inline void gotInputRequest()
+{
+	// nobody should set the raw input while we're processing the input.
+	// it might not screw anything up but it would be completely useless.
+	assert(!validToProcessInput);
+}
 
 void NDS_setPad(bool R,bool L,bool D,bool U,bool T,bool S,bool B,bool A,bool Y,bool X,bool W,bool E,bool G, bool F)
 {
+	gotInputRequest();
+	UserButtons& rawButtons = rawUserInput.buttons;
+	rawButtons.R = R;
+	rawButtons.L = L;
+	rawButtons.D = D;
+	rawButtons.U = U;
+	rawButtons.T = T;
+	rawButtons.S = S;
+	rawButtons.B = B;
+	rawButtons.A = A;
+	rawButtons.Y = Y;
+	rawButtons.X = X;
+	rawButtons.W = W;
+	rawButtons.E = E;
+	rawButtons.G = G;
+	rawButtons.F = F;
+}
+void NDS_setTouchPos(u16 x, u16 y)
+{
+	gotInputRequest();
+	rawUserInput.touch.touchX = x<<4;
+	rawUserInput.touch.touchY = y<<4;
+	rawUserInput.touch.isTouch = true;
+	nds.stylusJitter = CommonSettings.StylusJitter;
 
-	bool padarray[12] = {R, L, D, U, T, S, B, A, Y, X, W, E};
+	if(movieMode != MOVIEMODE_INACTIVE && movieMode != MOVIEMODE_FINISHED)
+	{
+		// just in case, since the movie only stores 8 bits per touch coord
+#ifdef WORDS_BIGENDIAN
+		rawUserInput.touch.touchX &= 0xF00F;
+		rawUserInput.touch.touchY &= 0xF00F;
+#else
+		rawUserInput.touch.touchX &= 0x0FF0;
+		rawUserInput.touch.touchY &= 0x0FF0;
+#endif
+	}
+}
+void NDS_releaseTouch(void)
+{ 
+	gotInputRequest();
+	rawUserInput.touch.touchX = 0;
+	rawUserInput.touch.touchY = 0;
+	rawUserInput.touch.isTouch = false;
+}
+void NDS_setMic(bool pressed)
+{
+	gotInputRequest();
+	rawUserInput.mic.micButtonPressed = (pressed ? TRUE : FALSE);
+}
 
-	SetTurbo(padarray);
 
-	R=padarray[0];
-	L=padarray[1];
-	D=padarray[2];
-	U=padarray[3];
-	T=padarray[4];
-	S=padarray[5];
-	B=padarray[6];
-	A=padarray[7];
-	Y=padarray[8];
-	X=padarray[9];
-	W=padarray[10];
-	E=padarray[11];
+static void NDS_applyFinalInput();
 
-	if(AutoHold.Right) R=!padarray[0];
-	if(AutoHold.Left)  L=!padarray[1];
-	if(AutoHold.Down)  D=!padarray[2];
-	if(AutoHold.Up)    U=!padarray[3];
-	if(AutoHold.Select)T=!padarray[4];
-	if(AutoHold.Start) S=!padarray[5];
-	if(AutoHold.B)     B=!padarray[6];
-	if(AutoHold.A)     A=!padarray[7];
-	if(AutoHold.Y)     Y=!padarray[8];
-	if(AutoHold.X)     X=!padarray[9];
-	if(AutoHold.L)     W=!padarray[10];
-	if(AutoHold.R)     E=!padarray[11];
 
-	//this macro is the opposite of what you would expect
-#define FIX(b) (b?0:0x80)
+void NDS_beginProcessingInput()
+{
+	// start off from the raw input
+	intermediateUserInput = rawUserInput;
 
-	int r = FIX(R);
-	int l = FIX(L);
-	int d = FIX(D);
-	int u = FIX(U);
-	int t = FIX(T);
-	int s = FIX(S);
-	int b = FIX(B);
-	int a = FIX(A);
-	int y = FIX(Y);
-	int x = FIX(X);
-	int w = FIX(W);
-	int e = FIX(E);
-	int g = FIX(G);
-	int f = FIX(F);
+	// processing is valid now
+	validToProcessInput = true;
+}
+
+void NDS_endProcessingInput()
+{
+	// transfer the processed input
+	finalUserInput = intermediateUserInput;
+
+	// processing is invalid now
+	validToProcessInput = false;
+
+	// use the final input for a few things right away
+	NDS_applyFinalInput();
+}
+
+
+
+
+
+
+
+
+static void NDS_applyFinalInput()
+{
+	const UserInput& input = NDS_getFinalUserInput();
 
 	u16	pad	= (0 |
-		((a) >> 7) |
-		((b) >> 6) |
-		((s) >> 5) |
-		((t) >> 4) |
-		((r) >> 3) |
-		((l) >> 2) |
-		((u) >> 1) |
-		((d))	   |
-		((e) << 1) |
-		((w) << 2)) ;
+		((input.buttons.A ? 0 : 0x80) >> 7) |
+		((input.buttons.B ? 0 : 0x80) >> 6) |
+		((input.buttons.T ? 0 : 0x80) >> 5) |
+		((input.buttons.S ? 0 : 0x80) >> 4) |
+		((input.buttons.R ? 0 : 0x80) >> 3) |
+		((input.buttons.L ? 0 : 0x80) >> 2) |
+		((input.buttons.U ? 0 : 0x80) >> 1) |
+		((input.buttons.D ? 0 : 0x80)     ) |
+		((input.buttons.E ? 0 : 0x80) << 1) |
+		((input.buttons.W ? 0 : 0x80) << 2)) ;
 
-	((u16 *)ARM9Mem.ARM9_REG)[0x130>>1] = (u16)pad;
+	pad = LOCAL_TO_LE_16(pad);
+	((u16 *)MMU.ARM9_REG)[0x130>>1] = (u16)pad;
 	((u16 *)MMU.ARM7_REG)[0x130>>1] = (u16)pad;
 
-	if (!f && !countLid) 
+	u16 k_cnt = ((u16 *)MMU.ARM9_REG)[0x132>>1];
+	if ( k_cnt & (1<<14))
+	{
+		//INFO("ARM9: KeyPad IRQ (pad 0x%04X, cnt 0x%04X (condition %s))\n", pad, k_cnt, k_cnt&(1<<15)?"AND":"OR");
+		u16 k_cnt_selected = (k_cnt & 0x3F);
+		if (k_cnt&(1<<15))	// AND
+		{
+			if ((~pad & k_cnt_selected) == k_cnt_selected) NDS_makeIrq(ARMCPU_ARM9,IRQ_BIT_KEYPAD);
+		}
+		else				// OR
+		{
+			if (~pad & k_cnt_selected) NDS_makeIrq(ARMCPU_ARM9,IRQ_BIT_KEYPAD);
+		}
+	}
+
+	k_cnt = ((u16 *)MMU.ARM7_REG)[0x132>>1];
+	if ( k_cnt & (1<<14))
+	{
+		//INFO("ARM7: KeyPad IRQ (pad 0x%04X, cnt 0x%04X (condition %s))\n", pad, k_cnt, k_cnt&(1<<15)?"AND":"OR");
+		u16 k_cnt_selected = (k_cnt & 0x3F);
+		if (k_cnt&(1<<15))	// AND
+		{
+			if ((~pad & k_cnt_selected) == k_cnt_selected) NDS_makeIrq(ARMCPU_ARM7,IRQ_BIT_KEYPAD);
+		}
+		else				// OR
+		{
+			if (~pad & k_cnt_selected) NDS_makeIrq(ARMCPU_ARM7,IRQ_BIT_KEYPAD);
+		}
+	}
+
+
+	if(input.touch.isTouch)
+	{
+		u16 adc_x = NDS_getADCTouchPosX(input.touch.touchX);
+		u16 adc_y = NDS_getADCTouchPosY(input.touch.touchY);
+		nds.adc_touchX = adc_x;
+		nds.adc_touchY = adc_y;
+		nds.adc_jitterctr = 0;
+
+		nds.scr_touchX = input.touch.touchX;
+		nds.scr_touchY = input.touch.touchY;
+		nds.isTouch = 1;
+	}
+	else
+	{
+		nds.adc_touchX = 0;
+		nds.adc_touchY = 0;
+		nds.scr_touchX = 0;
+		nds.scr_touchY = 0;
+		nds.isTouch = 0;
+	}
+
+	if (input.buttons.F && !countLid) 
 	{
 		LidClosed = (!LidClosed) & 0x01;
 		if (!LidClosed)
 		{
-		//	SPU_Pause(FALSE);
-			NDS_makeARM7Int(22);
-
+			NDS_makeIrq(ARMCPU_ARM7,IRQ_BIT_ARM7_FOLD);
 		}
-		//else
-			//SPU_Pause(TRUE);
 
 		countLid = 30;
 	}
@@ -2631,60 +2889,160 @@ void NDS_setPad(bool R,bool L,bool D,bool U,bool T,bool S,bool B,bool A,bool Y,b
 			countLid--;
 	}
 
-	u16 padExt = (((u16 *)MMU.ARM7_REG)[0x136>>1] & 0x0070) |
-		((x) >> 7) |
-		((y) >> 6) |
-		((g) >> 4) |
+	u16 padExt = ((input.buttons.X ? 0 : 0x80) >> 7) |
+		((input.buttons.Y ? 0 : 0x80) >> 6) |
+		((input.buttons.G ? 0 : 0x80) >> 4) |
 		((LidClosed) << 7) |
 		0x0034;
 
+	padExt = LOCAL_TO_LE_16(padExt);
+	padExt |= (((u16 *)MMU.ARM7_REG)[0x136>>1] & 0x0070);
+	
 	((u16 *)MMU.ARM7_REG)[0x136>>1] = (u16)padExt;
 
 	InputDisplayString=MakeInputDisplayString(padExt, pad);
 
 	//put into the format we want for the movie system
-	//RLDUTSBAYXWEGF
-#undef FIX
-#define FIX(b) (b?1:0)
+	//fRLDUTSBAYXWEg
+	//we don't really need nds.pad anymore, but removing it would be a pain
 
-	r = FIX(R);
-	l = FIX(L);
-	d = FIX(D);
-	u = FIX(U);
-	t = FIX(T);
-	s = FIX(S);
-	b = FIX(B);
-	a = FIX(A);
-	y = FIX(Y);
-	x = FIX(X);
-	w = FIX(W);
-	e = FIX(E);
-	g = FIX(G);
-	f = FIX(F);
+ 	nds.pad =
+		((input.buttons.R ? 1 : 0) << 12)|
+		((input.buttons.L ? 1 : 0) << 11)|
+		((input.buttons.D ? 1 : 0) << 10)|
+		((input.buttons.U ? 1 : 0) << 9)|
+		((input.buttons.T ? 1 : 0) << 8)|
+		((input.buttons.S ? 1 : 0) << 7)|
+		((input.buttons.B ? 1 : 0) << 6)|
+		((input.buttons.A ? 1 : 0) << 5)|
+		((input.buttons.Y ? 1 : 0) << 4)|
+		((input.buttons.X ? 1 : 0) << 3)|
+		((input.buttons.W ? 1 : 0) << 2)|
+		((input.buttons.E ? 1 : 0) << 1);
+}
 
-	if(f) movie_lid=true;
-	else movie_lid=false;
 
-	nds.pad =
-		(FIX(r)<<12)|
-		(FIX(l)<<11)|
-		(FIX(d)<<10)|
-		(FIX(u)<<9)|
-		(FIX(s)<<8)|
-		(FIX(t)<<7)|
-		(FIX(b)<<6)|
-		(FIX(a)<<5)|
-		(FIX(y)<<4)|
-		(FIX(x)<<3)|
-		(FIX(w)<<2)|
-		(FIX(e)<<1);
+void NDS_suspendProcessingInput(bool suspend)
+{
+	static int suspendCount = 0;
+	if(suspend)
+	{
+		// enter non-processing block
+		assert(validToProcessInput);
+		validToProcessInput = false;
+		suspendCount++;
+	}
+	else if(suspendCount)
+	{
+		// exit non-processing block
+		validToProcessInput = true;
+		suspendCount--;
+	}
+	else
+	{
+		// unwound past first time -> not processing
+		validToProcessInput = false;
+	}
+}
 
-	// TODO: low power IRQ
+void NDS_swapScreen()
+{
+	if (GPU->GetDisplayMain()->GetEngineID() == GPUEngineID_Main)
+	{
+		GPU->GetDisplayMain()->SetEngineByID(GPUEngineID_Sub);
+		GPU->GetDisplayTouch()->SetEngineByID(GPUEngineID_Main);
+	}
+	else
+	{
+		GPU->GetDisplayMain()->SetEngineByID(GPUEngineID_Main);
+		GPU->GetDisplayTouch()->SetEngineByID(GPUEngineID_Sub);
+	}
 }
 
 
 void emu_halt() {
+	//printf("halting emu: ARM9 PC=%08X/%08X, ARM7 PC=%08X/%08X\n", NDS_ARM9.R[15], NDS_ARM9.instruct_adr, NDS_ARM7.R[15], NDS_ARM7.instruct_adr);
 	execute = false;
+#ifdef LOG_ARM9
+	if (fp_dis9)
+	{
+		char buf[256] = { 0 };
+		sprintf(buf, "halting emu: ARM9 PC=%08X/%08X\n", NDS_ARM9.R[15], NDS_ARM9.instruct_adr);
+		fwrite(buf, 1, strlen(buf), fp_dis9);
+		INFO("ARM9 halted\n");
+	}
+#endif
+
+#ifdef LOG_ARM7
+	if (fp_dis7)
+	{
+		char buf[256] = { 0 };
+		sprintf(buf, "halting emu: ARM7 PC=%08X/%08X\n", NDS_ARM7.R[15], NDS_ARM7.instruct_adr);
+		fwrite(buf, 1, strlen(buf), fp_dis7);
+		INFO("ARM7 halted\n");
+	}
+#endif
+}
+
+//returns true if exmemcnt specifies satisfactory parameters for the device, which calls this function
+bool ValidateSlot2Access(u32 procnum, u32 demandSRAMSpeed, u32 demand1stROMSpeed, u32 demand2ndROMSpeed, int clockbits)
+{
+	static const u32 _sramSpeeds[] = {10,8,6,18};
+	static const u32 _rom1Speeds[] = {10,8,6,18};
+	static const u32 _rom2Speeds[] = {6,4};
+	u16 exmemcnt = T1ReadWord(MMU.MMU_MEM[procnum][0x40], 0x204);
+	u16 exmemcnt9 = T1ReadWord(MMU.ARM9_REG, 0x204);
+	u32 arm7access = (exmemcnt9 & EXMEMCNT_MASK_SLOT2_ARM7);
+	u32 sramSpeed = _sramSpeeds[(exmemcnt & EXMEMCNT_MASK_SLOT2_SRAM_TIME)];
+	u32 romSpeed1 = _rom1Speeds[(exmemcnt & EXMEMCNT_MASK_SLOT2_ROM_1ST_TIME)>>2];
+	u32 romSpeed2 = _rom2Speeds[(exmemcnt & EXMEMCNT_MASK_SLOT2_ROM_2ND_TIME)>>4];
+	u32 curclockbits = (exmemcnt & EXMEMCNT_MASK_SLOT2_CLOCKRATE)>>5;
+	
+	if(procnum==ARMCPU_ARM9 && arm7access) return false;
+	if(procnum==ARMCPU_ARM7 && !arm7access) return false;
+
+	//what we're interested in here is whether the rom/ram are too low -> too fast. then accesses won't have enough time to work.
+	//i'm not sure if this gives us enough flexibility, but it is good enough for now.
+	//should make the arguments to this function bitmasks later if we need better.
+	if(sramSpeed < demandSRAMSpeed) return false;
+	if(romSpeed1 < demand1stROMSpeed) return false;
+	if(romSpeed2 < demand2ndROMSpeed) return false;
+
+	if(clockbits != -1 && clockbits != (int)curclockbits) return false;
+
+	return true;
+}
+
+void NDS_GetCPULoadAverage(u32 &outLoadAvgARM9, u32 &outLoadAvgARM7)
+{
+	//calculate a 16 frame arm9 load average
+	u32 calcLoad = 0;
+	for (size_t i = 0; i < 16; i++)
+	{
+		//blend together a few frames to keep low-framerate games from having a jittering load average
+		//(they will tend to work 100% for a frame and then sleep for a while)
+		//4 frames should handle even the slowest of games
+		u32 sample	= nds.runCycleCollector[ARMCPU_ARM9][(i + 0 + nds.idleFrameCounter) & 15]
+					+ nds.runCycleCollector[ARMCPU_ARM9][(i + 1 + nds.idleFrameCounter) & 15]
+					+ nds.runCycleCollector[ARMCPU_ARM9][(i + 2 + nds.idleFrameCounter) & 15]
+					+ nds.runCycleCollector[ARMCPU_ARM9][(i + 3 + nds.idleFrameCounter) & 15];
+		sample /= 4;
+		calcLoad = calcLoad/8 + sample*7/8;
+	}
+	outLoadAvgARM9 = std::min<u32>( 100, std::max<u32>(0, (u32)(calcLoad*100/1120380)) );
+	
+	//calculate a 16 frame arm7 load average
+	calcLoad = 0;
+	for (size_t i = 0; i < 16; i++)
+	{
+		u32 sample	= nds.runCycleCollector[ARMCPU_ARM7][(i + 0 + nds.idleFrameCounter) & 15]
+					+ nds.runCycleCollector[ARMCPU_ARM7][(i + 1 + nds.idleFrameCounter) & 15]
+					+ nds.runCycleCollector[ARMCPU_ARM7][(i + 2 + nds.idleFrameCounter) & 15]
+					+ nds.runCycleCollector[ARMCPU_ARM7][(i + 3 + nds.idleFrameCounter) & 15];
+		sample /= 4;
+		calcLoad = calcLoad/8 + sample*7/8;
+	}
+	outLoadAvgARM7 = std::min<u32>( 100, std::max<u32>(0, (u32)(calcLoad*100/1120380)) );
 }
 
 //these templates needed to be instantiated manually

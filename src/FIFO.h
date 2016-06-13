@@ -1,32 +1,25 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright 2006 yopyop
+	Copyright 2007 shash
+	Copyright 2007-2011 DeSmuME team
 
-    Copyright 2007 shash
-	Copyright 2007-2009 DeSmuME team
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    This file is part of DeSmuME
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 
 #ifndef FIFO_H
 #define FIFO_H
-
-//#define USE_GEOMETRY_FIFO_EMULATION
 
 #include "types.h"
 
@@ -35,7 +28,9 @@ typedef struct
 {
 	u32		buf[16];
 	
+	u8		head;
 	u8		tail;
+	u8		size;
 } IPC_FIFO;
 
 extern IPC_FIFO ipc_fifo[2];
@@ -45,19 +40,40 @@ extern u32 IPC_FIFOrecv(u8 proc);
 extern void IPC_FIFOcnt(u8 proc, u16 val);
 
 //=================================================== GFX FIFO
+
+//yeah, its oversize for now. thats a simpler solution
+//moon seems to overdrive the fifo with immediate dmas
+//i think this might be nintendo code too
+#define HACK_GXIFO_SIZE 200000
+
 typedef struct
 {
-	u8		cmd[261];
-	u32		param[261];
+	u8		cmd[HACK_GXIFO_SIZE];
+	u32		param[HACK_GXIFO_SIZE];
 
-	u16		tail;		// tail
+	u32		head;		// start position
+	u32		tail;		// tail
+	u32		size;		// size FIFO buffer
+	u32		matrix_stack_op_size; //number of matrix stack items in the fifo (stack is busy when this is nonzero)
 } GFX_FIFO;
 
+typedef struct
+{
+	u8		cmd[4];
+	u32		param[4];
+
+	u8		head;
+	u8		tail;
+	u8		size;
+} GFX_PIPE;
+
+extern GFX_PIPE gxPIPE;
 extern GFX_FIFO gxFIFO;
-extern void GFX_FIFOclear();
-extern void GFX_FIFOsend(u8 cmd, u32 param);
-extern BOOL GFX_FIFOrecv(u8 *cmd, u32 *param);
-extern void GFX_FIFOcnt(u32 val);
+void GFX_PIPEclear();
+void GFX_FIFOclear();
+void GFX_FIFOsend(u8 cmd, u32 param);
+BOOL GFX_PIPErecv(u8 *cmd, u32 *param);
+void GFX_FIFOcnt(u32 val);
 
 //=================================================== Display memory FIFO
 typedef struct
@@ -68,8 +84,9 @@ typedef struct
 } DISP_FIFO;
 
 extern DISP_FIFO disp_fifo;
-extern void DISP_FIFOinit();
-extern void DISP_FIFOsend(u32 val);
-extern u32 DISP_FIFOrecv();
+void DISP_FIFOinit();
+void DISP_FIFOsend(u32 val);
+u32 DISP_FIFOrecv();
+void DISP_FIFOreset();
 
 #endif

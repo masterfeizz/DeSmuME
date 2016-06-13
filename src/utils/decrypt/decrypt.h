@@ -21,6 +21,17 @@
 #ifndef _DECRYPT_H_
 #define _DECRYPT_H_
 
-bool DecryptSecureArea(u8 *romdata, long romlen);
+#include "../../types.h"
+
+extern const unsigned char arm7_key[];
+
+//decrypts the secure area of a rom (or does nothing if it is already decrypted)
+bool DecryptSecureArea(u8 *romheader, u8 *secure);
+
+//encrypts the secure area of a rom (or does nothing if it is already encrypted)
+bool EncryptSecureArea(u8 *romheader, u8 *secure);
+
+//since we have rom-type detection heuristics here, this module is responsible for checking whether a rom is valid
+bool CheckValidRom(u8 *header, u8 *secure);
 
 #endif

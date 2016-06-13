@@ -1,32 +1,33 @@
-/*  Copyright (C) 2006 yopyop
-    yopyop156@ifrance.com
-    yopyop156.ifrance.com
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2006-2015 DeSmuME team
 
-    This file is part of DeSmuME
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "oamView.h"
+
 #include <commctrl.h>
-#include "debug.h"
-#include "resource.h"
+
+#include "../debug.h"
 #include "../MMU.h"
 #include "../GPU.h"
 #include "../NDSSystem.h"
+
+#include "resource.h"
 #include "windriver.h"
+#include "main.h"
 
 typedef struct
 {
@@ -34,18 +35,41 @@ typedef struct
 	bool autoup;
 
 	s16 num;
-	OAM *oam;
-	GPU *gpu;
+	void*oam;
+	GPUEngineBase *gpu;
+	u8 scale;
+	bool border;
 } oamview_struct;
 
 oamview_struct	*OAMView = NULL;
+
+HBRUSH bhScyx = NULL;
+HBRUSH bhBack = NULL;
+RECT	rcThumb = {0, 0, 0, 0};
 
 const char dimm[4][4][8] = 
 {
      {"8 x 8", "16 x 8", "8 x 16", "- x -"},
      {"16 x 16", "32 x 8", "8 x 32", "- x -"},
      {"32 x 32", "32 x 16", "16 x 32", "- x -"},
-     {"64 x 64", "64 x 32", "32 x 64", "- x -"},
+     {"64 x 64", "64 x 32", "32 x 64", "- x -"}
+};
+
+const u8 dimm_int[4][4][2] =
+{
+	{{8,8}, {16,8}, {8,16}, {0,0}},
+	{{16,16}, {32,8}, {8,32}, {0,0}},
+	{{32,32}, {32,16}, {16,32}, {0,0}},
+	{{64,64}, {64,32}, {32,64}, {0,0}}
+};
+
+#define SIZE_THUMB 128
+const u8 max_scale[4][4] =
+{
+	{SIZE_THUMB/8,  SIZE_THUMB/16, SIZE_THUMB/16, 0},
+	{SIZE_THUMB/16, SIZE_THUMB/32, SIZE_THUMB/32, 0},
+	{SIZE_THUMB/32, SIZE_THUMB/32, SIZE_THUMB/32, 0},
+	{SIZE_THUMB/64, SIZE_THUMB/64, SIZE_THUMB/64, 0},
 };
 
 LRESULT OAMViewBox_OnPaint(HWND hwnd, WPARAM wParam, LPARAM lParam)
@@ -88,15 +112,20 @@ LRESULT OamView_OnPaint(HWND hwnd, oamview_struct *win, WPARAM wParam, LPARAM lP
 {
         HDC          hdc;
         PAINTSTRUCT  ps;
-        OAM * oam = &win->oam[win->num];
+
+				struct MyOam
+				{
+					u16 attr0,attr1,attr2,attr3;
+				} myOam;
+
+				MyOam* oam = &myOam;
+				memcpy(oam,(u8*)win->oam + 8*win->num,8);
+
         char text[80];
         u16 bitmap[256*192];
-		u8 bitmap_alpha[256*192];
-		u8 type[256*192];
-        u8 prio[256*192];
         BITMAPV4HEADER bmi;
         u16 i;
-        s16 x;
+        s16 x = 0, y = 0;
 
         //CreateBitmapIndirect(&bmi);
         memset(&bmi, 0, sizeof(bmi));
@@ -113,9 +142,6 @@ LRESULT OamView_OnPaint(HWND hwnd, oamview_struct *win, WPARAM wParam, LPARAM lP
         for(i = 0; i < 256*192; ++i)
         {
            bitmap[i] = 0x7F0F;
-		   bitmap_alpha[i] = 0;
-		   type[i] = 0;
-           prio[i] = 4;
         }
      
         hdc = BeginPaint(hwnd, &ps);
@@ -138,20 +164,26 @@ LRESULT OamView_OnPaint(HWND hwnd, oamview_struct *win, WPARAM wParam, LPARAM lP
                   SetWindowText(GetDlgItem(hwnd, IDC_MODE), "Bitmap");
         }
         
-        sprintf(text, "0x%08X", oam->attr0/*oam->attr2&0x3FF*/);
+        sprintf(text, "%04X", oam->attr2&0x3FF);
         SetWindowText(GetDlgItem(hwnd, IDC_TILE), text);
         
-        sprintf(text, "0x%08X", oam->attr1/*oam->attr2&0x3FF*/);
+		if (oam->attr0&(1<<13))
+		{
+			sprintf(text, "256 colors");
+		}
+		else
+		{
+			sprintf(text, "16 colors:%2i", (oam->attr2>>12)&0xFF);
+		}
         SetWindowText(GetDlgItem(hwnd, IDC_PAL), text);
         
-        //SetWindowText(GetDlgItem(hwnd, IDC_PAL), (oam->attr0&(1<<13))?"256 couleurs": "16 couleurs");
-        
-        sprintf(text, "%d 0x%08X", (oam->attr2>>10)&3, oam->attr2);
+        sprintf(text, "%d", (oam->attr2>>10)&3);
         SetWindowText(GetDlgItem(hwnd, IDC_PRIO), text);
         
         x = oam->attr1&0x1FF;
         x = ((s16)(x<<7)>>7);
-        sprintf(text, "%d x %d", x, oam->attr0&0xFF);
+		y=oam->attr0&0xFF;
+        sprintf(text, "%d x %d", x, y);
         SetWindowText(GetDlgItem(hwnd, IDC_COOR), text);
         
         SetWindowText(GetDlgItem(hwnd, IDC_DIM), dimm[oam->attr1>>14][oam->attr0>>14]);
@@ -172,21 +204,33 @@ LRESULT OamView_OnPaint(HWND hwnd, oamview_struct *win, WPARAM wParam, LPARAM lP
              if(oam->attr0&(1<<9))
                   sprintf(text, "INVISIBLE");
              else
-                  sprintf(text, "%s %s", oam->attr0&(1<<12)?"H FLIP":"",  oam->attr0&(1<<13)?"V FLIP":"");
+                  sprintf(text, "%s %s", oam->attr1&(1<<12)?"H FLIP":"",  oam->attr1&(1<<13)?"V FLIP":"");
                   
              SetWindowText(GetDlgItem(hwnd, IDC_PROP0), text);
              
              SetWindowText(GetDlgItem(hwnd, IDC_PROP1), "");
         }
         
-		GPU copy = *win->gpu;
         for(i = 0; i < 192; ++i)
         {
-			copy.currLine = i;
-             copy.spriteRender((u8*)(bitmap + i*256), bitmap_alpha + i*256, type + i*256, prio + i*256);
+             win->gpu->SpriteRenderDebug(i, (u16*)(bitmap + i*256));
         }
+
+		u32 width = dimm_int[(oam->attr1>>14)][(oam->attr0>>14)][0];
+		u32 height = dimm_int[(oam->attr1>>14)][(oam->attr0>>14)][1];
+		RECT rc = {180 + x, 4 + y, 180 + x + width, 4 + y + height};
         
         SetDIBitsToDevice(hdc, 180, 4, 256, 192, 0, 0, 0, 192, bitmap, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
+		
+		u8 max = max_scale[oam->attr1>>14][oam->attr0>>14];
+		u8 tmp_scale = (win->scale > max)?max:win->scale;
+		u32 w2 = width*tmp_scale;
+		u32 h2 = height*tmp_scale; 
+		FillRect(hdc, &rcThumb, bhBack);
+		StretchBlt(hdc, (436-SIZE_THUMB/2)-(w2/2), (200+SIZE_THUMB/2)-(h2/2), w2, h2, hdc, rc.left, rc.top, width, height, SRCCOPY);
+
+		if (win->border)
+			FrameRect(hdc, &rc, bhScyx);
 
         EndPaint(hwnd, &ps);
 
@@ -224,8 +268,10 @@ BOOL CALLBACK ViewOAMProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                  {
 						OAMView = new oamview_struct;
 						memset(OAMView, 0, sizeof(oamview_struct));
-						OAMView->oam = (OAM *)(ARM9Mem.ARM9_OAM);
-						OAMView->gpu = MainScreen.gpu;
+						OAMView->oam = MMU.ARM9_OAM;
+						OAMView->gpu = GPU->GetEngineMain();
+						OAMView->scale = 2;
+						OAMView->border = true;
 
 						OAMView->autoup_secs = 1;
 						SendMessage(GetDlgItem(hwnd, IDC_AUTO_UPDATE_SPIN),
@@ -237,6 +283,13 @@ BOOL CALLBACK ViewOAMProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                       SendMessage(combo, CB_ADDSTRING, 0,(LPARAM)"Main screen sprite");
                       SendMessage(combo, CB_ADDSTRING, 0,(LPARAM)"Sub screen sprite");
                       SendMessage(combo, CB_SETCURSEL, 0, 0);
+
+					  bhScyx = CreateSolidBrush(RGB(255,0,0));
+					  bhBack = CreateSolidBrush(RGB(123,198,255));
+					  SetRect(&rcThumb, 436-SIZE_THUMB, 200, 436, 200+SIZE_THUMB);
+
+					  SendMessage(GetDlgItem(hwnd, IDC_S2X), BM_SETCHECK, true, 0);
+					  SendMessage(GetDlgItem(hwnd, IDC_BORDER), BM_SETCHECK, true, 0);
                  }
                  return 1;
             case WM_CLOSE :
@@ -246,12 +299,10 @@ BOOL CALLBACK ViewOAMProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
 					KillTimer(hwnd, IDT_VIEW_OAM);
 					OAMView->autoup = false;
 				}
-
-				if (OAMView!=NULL) 
-				{
-					delete OAMView;
-					OAMView = NULL;
-				}
+				delete OAMView;
+				OAMView = NULL;
+				DeleteObject(bhScyx);
+				DeleteObject(bhBack);
 				//INFO("Close OAM viewer dialog\n");
 				PostQuitMessage(0);
 				return 0;
@@ -269,14 +320,15 @@ BOOL CALLBACK ViewOAMProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                            ++(OAMView->num);
                            if(OAMView->num>127)
                                 OAMView->num = 127;
+						   InvalidateRect(hwnd, NULL, FALSE);
                            break;
                       case SB_LINELEFT :
                            --(OAMView->num);
                            if(OAMView->num<0)
                                 OAMView->num = 0;
+						   InvalidateRect(hwnd, NULL, FALSE);
                            break;
                  }
-                 InvalidateRect(hwnd, NULL, FALSE);
                  return 1;
             case WM_COMMAND :
                  switch (LOWORD (wParam))
@@ -326,14 +378,14 @@ BOOL CALLBACK ViewOAMProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                                             switch(sel)
                                             {
                                                  case 0 :
-                                                      OAMView->oam = (OAM *)ARM9Mem.ARM9_OAM;
+                                                      OAMView->oam = MMU.ARM9_OAM;
                                                       OAMView->num = 0;
-                                                      OAMView->gpu = MainScreen.gpu;
+                                                      OAMView->gpu = GPU->GetEngineMain();
                                                       break;
                                                  case 1 :
-                                                      OAMView->oam = (OAM *)(ARM9Mem.ARM9_OAM+0x400);
+                                                      OAMView->oam = (MMU.ARM9_OAM+0x400);
                                                       OAMView->num = 0;
-                                                      OAMView->gpu = SubScreen.gpu;
+                                                      OAMView->gpu = GPU->GetEngineSub();
                                                       break;
                                             }
                                        }
@@ -341,6 +393,27 @@ BOOL CALLBACK ViewOAMProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                                        return 1;
                             }
                              return 1;
+
+						case IDC_S2X:
+							OAMView->scale = 2;
+							InvalidateRect(hwnd, NULL, FALSE);
+							return 1;
+						case IDC_S4X:
+							OAMView->scale = 4;
+							InvalidateRect(hwnd, NULL, FALSE);
+							return 1;
+						case IDC_S8X:
+							OAMView->scale = 8;
+							InvalidateRect(hwnd, NULL, FALSE);
+							return 1;
+						case IDC_S16X:
+							OAMView->scale = 16;
+							InvalidateRect(hwnd, NULL, FALSE);
+							return 1;
+						case IDC_BORDER:
+							OAMView->border = (IsDlgButtonChecked(hwnd, IDC_BORDER) == BST_CHECKED);
+							InvalidateRect(hwnd, NULL, FALSE);
+							return 1;
                  }
                  return 0;
      }

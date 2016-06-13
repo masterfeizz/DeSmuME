@@ -22,17 +22,13 @@
 #ifndef __DESMUME_H__
 #define __DESMUME_H__
 
-extern void desmume_init( struct armcpu_memory_iface *arm9_mem_if,
-                          struct armcpu_ctrl_iface **arm9_ctrl_iface,
-                          struct armcpu_memory_iface *arm7_mem_if,
-                          struct armcpu_ctrl_iface **arm7_ctrl_iface,
-                          int disable_sound);
+extern void desmume_init( int disable_sound);
 extern void desmume_free( void);
 
 extern void desmume_pause( void);
 extern void desmume_resume( void);
 extern void desmume_toggle( void);
-extern BOOL desmume_running( void);
+extern bool desmume_running( void);
 
 extern void desmume_cycle( void);
 

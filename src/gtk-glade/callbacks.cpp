@@ -1,5 +1,6 @@
 /* callbacks.c - this file is part of DeSmuME
  *
+ * Copyright (C) 2007-2015 DeSmuME Team
  * Copyright (C) 2007 Damien Nozay (damdoum)
  * Copyright (C) 2007 Pascal Giard (evilynux)
  * Author: damdoum at users.sourceforge.net
@@ -21,6 +22,10 @@
  */
 
 #include "callbacks.h"
+
+#include "../GPU.h"
+
+#define SAVESTATE_SLOT(x) ((x) < 10 ? (x) : 0)
 
 /* globals */
 int Frameskip = 0;
@@ -62,7 +67,7 @@ static void update_savestate_menu(const char * cb_name, u8 num)
 
   snprintf( cb, 39, "%s%d", cb_name, num);
   w = glade_xml_get_widget(xml, cb);
-  set_menuitem_label( w, savestates[num-1].date );
+  set_menuitem_label( w, savestates[SAVESTATE_SLOT(num)].date );
 }
 
 static void update_savestates_menu()
@@ -71,7 +76,7 @@ static void update_savestates_menu()
 
   for( i = 1; i <= NB_STATES; i++ )
     {
-      if( savestates[i-1].exists == TRUE )
+      if( savestates[SAVESTATE_SLOT(i)].exists == TRUE )
         {
           update_savestate_menu("loadstate", i);
           update_savestate_menu("savestate", i);
@@ -87,7 +92,7 @@ static void update_savestates_menu()
 static void update_savestate(u8 num)
 {
   desmume_pause();
-  savestate_slot(num);
+  savestate_slot(SAVESTATE_SLOT(num));
   update_savestate_menu("savestate", num);
   update_savestate_menu("loadstate", num);
   desmume_resume();
@@ -216,15 +221,16 @@ static void Printscreen()
         gchar *filename;
         GError *error = NULL;
         u8 *rgb;
+        u16 *gpuFramebuffer = (u16 *)GPU->GetDisplayInfo().masterNativeBuffer;
         static int seq = 0;
 
         rgb = (u8 *) malloc(SCREENS_PIXEL_SIZE*3);
         if (!rgb)
                 return;
         for (int i = 0; i < SCREENS_PIXEL_SIZE; i++) {
-                rgb[(i * 3) + 0] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 0) & 0x1f) << 3;
-                rgb[(i * 3) + 1] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 5) & 0x1f) << 3;
-                rgb[(i * 3) + 2] = ((*((u16 *)&GPU_screen[(i<<1)]) >> 10) & 0x1f) << 3;
+                rgb[(i * 3) + 0] = ((gpuFramebuffer[i] >> 0) & 0x1f) << 3;
+                rgb[(i * 3) + 1] = ((gpuFramebuffer[i] >> 5) & 0x1f) << 3;
+                rgb[(i * 3) + 2] = ((gpuFramebuffer[i] >> 10) & 0x1f) << 3;
         }
 
         screenshot = gdk_pixbuf_new_from_data(rgb,
@@ -256,7 +262,7 @@ void  on_menu_pscreen_activate (GtkMenuItem *menuitem, gpointer user_data) { Pri
 /* MENU SAVES ***** ***** ***** ***** */
 void on_loadstateXX_activate (GtkMenuItem *m, gpointer d) {
 	int slot = dyn_CAST(int,d);
-	loadstate_slot(slot);
+	loadstate_slot(SAVESTATE_SLOT(slot));
 }
 void on_savestateXX_activate (GtkMenuItem *m, gpointer d) {
 	int slot = dyn_CAST(int,d);
@@ -478,10 +484,16 @@ void  on_menu_palview_activate      (GtkMenuItem *menuitem, gpointer user_data) 
 	GtkWidget * dlg = glade_xml_get_widget(xml_tools, "wtools_3_PalView");
 	gtk_widget_show(dlg);
 }
+#ifdef GTKGLEXT_AVAILABLE
 void  on_menu_tileview_activate     (GtkMenuItem *menuitem, gpointer user_data) {
 	GtkWidget * dlg = glade_xml_get_widget(xml_tools, "wtools_4_TileView");
 	gtk_widget_show(dlg);
 }
+#else
+void  on_menu_tileview_activate     (GtkMenuItem *menuitem, gpointer user_data) {
+	g_printerr("You need gtkglext for the tile viewer\n");
+}
+#endif
 void  on_menu_wtoolsXX_activate     (GtkMenuItem *menuitem, gpointer user_data) {
 	GtkWidget * w = (GtkWidget *) user_data;
 	gtk_widget_show(w);
@@ -512,20 +524,18 @@ void  on_wgt_Exec_toggled  (GtkToggleToolButton *toggletoolbutton, gpointer user
 
 
 /* LAYERS ***** ***** ***** ***** */
-static void change_bgx_layer(int layer, gboolean state, NDS_Screen scr) {
+static void change_bgx_layer(int layer, gboolean state, GPUEngineBase *gpuEngine) {
 	//if(!desmume_running()) return;
-	if(state==TRUE) { 
-		GPU_addBack(scr.gpu, layer);
-	} else {
-		GPU_remove(scr.gpu, layer); 
-	}
+	
+	gpuEngine->SetLayerEnableState(layer, (state) ? true : false);
+	
 	//fprintf(stderr,"Changed Layer %s to %d\n",layer,state);
 }
 void  on_wc_1_BGXX_toggled  (GtkToggleButton *togglebutton, gpointer user_data) {
 	int layer = dyn_CAST(int,user_data);
-	change_bgx_layer(layer, gtk_toggle_button_get_active(togglebutton), MainScreen);
+	change_bgx_layer(layer, gtk_toggle_button_get_active(togglebutton), GPU->GetEngineMain());
 }
 void  on_wc_2_BGXX_toggled  (GtkToggleButton *togglebutton, gpointer user_data) {
 	int layer = dyn_CAST(int,user_data);
-	change_bgx_layer(layer, gtk_toggle_button_get_active(togglebutton), SubScreen);
+	change_bgx_layer(layer, gtk_toggle_button_get_active(togglebutton), GPU->GetEngineSub());
 }

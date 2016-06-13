@@ -1,9 +1,27 @@
 //RamSearch dialog was copied and adapted from GENS11: http://code.google.com/p/gens-rerecording/
-//Authors: Upthorn, Nitsuja, adelikat
+//Authors: Nitsuja, Upthorn, adelikat
+
+/*
+	Modifications Copyright (C) 2009-2015 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 #ifndef RAM_SEARCH_H
 #define RAM_SEARCH_H
 
+#include <windows.h>
 
 //64k in Ram_68k[], 8k in Ram_Z80[]   
 //#define _68K_RAM_SIZE 64*1024
@@ -25,7 +43,7 @@
 
 //#define MAX_RAM_SIZE (0x112000)
 //#define MAX_RAM_SIZE (0xD2000)
-#define MAX_RAM_SIZE (0x400000)
+#define MAX_RAM_SIZE (0x400000 + 0x8000 + 0x4000)
 
 extern char rs_type_size;
 extern int ResultCount;

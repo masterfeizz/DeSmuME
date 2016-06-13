@@ -1,58 +1,60 @@
-///*  This file is part of DeSmuME, derived from several files in Snes9x 1.51 which are 
-//    licensed under the terms supplied at the end of this file (for the terms are very long!)
-//    Differences from that baseline version are:
-//
-//    Copyright (C) 2009 DeSmuME team
-//
-//    DeSmuME is free software; you can redistribute it and/or modify
-//    it under the terms of the GNU General Public License as published by
-//    the Free Software Foundation; either version 2 of the License, or
-//    (at your option) any later version.
-//
-//    DeSmuME is distributed in the hope that it will be useful,
-//    but WITHOUT ANY WARRANTY; without even the implied warranty of
-//    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//    GNU General Public License for more details.
-//
-//    You should have received a copy of the GNU General Public License
-//    along with DeSmuME; if not, write to the Free Software
-//    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-//*/
+/*
+	Copyright (C) 2006 yopyop
+	Copyright (C) 2008-2015 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 #ifndef HOTKEY_H_INCLUDED
 #define HOTKEY_H_INCLUDED
 
-#include <winsock2.h>
 #include <windows.h>
 #include <tchar.h>
 #include <string>
+#include "../types.h"
 
 enum HotkeyPage {
 	HOTKEY_PAGE_MAIN=0,
+	HOTKEY_PAGE_TOOLS,
 	HOTKEY_PAGE_MOVIE,
 	HOTKEY_PAGE_STATE,
 	HOTKEY_PAGE_STATE_SLOTS,
 	HOTKEY_PAGE_TURBO,
+	HOTKEY_PAGE_OTHER,
 	NUM_HOTKEY_PAGE,
 };
 
 static LPCTSTR hotkeyPageTitle[] = {
 	_T("Main"),
+	_T("Tools"),
 	_T("Movie"),
 	_T("Savestates"),
 	_T("Savestate Slots"),
 	_T("Turbo"),
+	_T("Other"),
 	_T("NUM_HOTKEY_PAGE"),
 };
 
 
 struct SCustomKey
 {
-	typedef void (*THandler) (int param);
+	typedef void (*THandlerDown) (int param, bool justPressed);
+	typedef void (*THandlerUp) (int param);
 	WORD key;
 	WORD modifiers;
-	THandler handleKeyDown;
-	THandler handleKeyUp;
+	THandlerDown handleKeyDown;
+	THandlerUp handleKeyUp;
 	HotkeyPage page;
 	std::wstring name;
 	const char* code;
@@ -66,8 +68,17 @@ struct SCustomKeys
 	SCustomKey Load[10];
 	SCustomKey Slot[10];
 	SCustomKey QuickSave, QuickLoad, NextSaveSlot, PreviousSaveSlot;
+	
+	SCustomKey Rotate0, Rotate90, Rotate180, Rotate270;
 
-	SCustomKey OpenROM, Reset, Pause, FrameAdvance, FastForward, FastForwardToggle, IncreaseSpeed, DecreaseSpeed, Microphone;
+	SCustomKey CursorToggle;
+
+	SCustomKey OpenROM, ReloadROM, Reset, Pause;
+
+#ifdef HAVE_JIT
+	SCustomKey CpuMode, JitBlockSizeDec, JitBlockSizeInc;
+#endif
+	SCustomKey FrameAdvance, FastForward, FastForwardToggle, IncreaseSpeed, DecreaseSpeed, FrameLimitToggle, Microphone, IncreasePressure, DecreasePressure, ToggleStylusJitter;
 
 	SCustomKey PlayMovie, RecordMovie, StopMovie, ToggleReadOnly;
 	
@@ -77,13 +88,25 @@ struct SCustomKeys
 
 	SCustomKey ToggleRasterizer;
 	SCustomKey PrintScreen;	//Screenshot
+	SCustomKey QuickPrintScreen;
 
 	SCustomKey RecordWAV, RecordAVI;
+
+	SCustomKey Rewind;
+
+	SCustomKey NewLuaScript, CloseLuaScripts, MostRecentLuaScript;
 
 	SCustomKey ToggleFrameCounter;
 	SCustomKey ToggleFPS;
 	SCustomKey ToggleInput;
 	SCustomKey ToggleLag;
+	SCustomKey ResetLagCounter;
+	SCustomKey StylusAutoHold;
+	SCustomKey LCDsMode;
+	SCustomKey LCDsSwap;
+	SCustomKey SearchCheats;
+	SCustomKey IncreaseVolume;
+	SCustomKey DecreaseVolume;
 	SCustomKey LastItem; // dummy, must be last
 
 	//--methods--
@@ -100,12 +123,13 @@ void InitCustomKeys (SCustomKeys *keys);
 int GetModifiers(int key);
 
 //HOTKEY HANDLERS
-void HK_PrintScreen(int);
-void HK_StateSaveSlot(int);
-void HK_StateLoadSlot(int);
-void HK_StateSetSlot(int);
-void HK_Pause(int);
-void HK_FastForward(int);
+void HK_PrintScreen(int, bool);
+void HK_QuickScreenShot(int, bool);
+void HK_StateSaveSlot(int, bool);
+void HK_StateLoadSlot(int, bool);
+void HK_StateSetSlot(int, bool);
+void HK_Pause(int, bool);
+void HK_FastForward(int, bool);
 
 extern bool AutoHoldPressed;
 

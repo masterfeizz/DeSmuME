@@ -2,8 +2,9 @@ SUBDIRS = doc
 include $(top_srcdir)/src/desmume.mk
 
 AM_CPPFLAGS += $(SDL_CFLAGS) $(GTKGLEXT_CFLAGS) $(LIBGLADE_CFLAGS) \
-		$(GTHREAD_CFLAGS) -DDATADIR=\"$(gladedir)/\" \
-		-DLOCALEDIR=\"$(localedir)\"
+		$(GTHREAD_CFLAGS) $(ALSA_CFLAGS) $(LIBAGG_CFLAGS) \
+		$(LIBSOUNDTOUCH_CFLAGS) \
+		-DDATADIR=\"$(gladedir)/\" -DLOCALEDIR=\"$(localedir)\"
 AM_LDFLAGS += -rdynamic $(INTLLIBS)
 
 EXTRA_DIST = $(glade_DATA) desmume-glade.desktop
@@ -26,11 +27,13 @@ desmume_glade_SOURCES =  \
 	dTools/callbacks_dtools.h \
 	dTools/dTools_display.h \
 	gdk_3Demu.cpp gdk_3Demu.h \
-	../sndsdl.h ../sndsdl.cpp ../ctrlssdl.h ../ctrlssdl.cpp
+	../sndsdl.h ../sndsdl.cpp ../ctrlssdl.h ../ctrlssdl.cpp \
+	../driver.h ../driver.cpp
 
 desmume_glade_LDADD = ../libdesmume.a \
 			$(SDL_LIBS) $(GTKGLEXT_LIBS) $(LIBGLADE_LIBS) \
-			$(GTHREAD_LIBS)
+			$(GTHREAD_LIBS) $(ALSA_LIBS) $(LIBAGG_LIBS) \
+			$(LIBSOUNDTOUCH_LIBS)
 if HAVE_GDB_STUB
 desmume_glade_LDADD += ../gdbstub/libgdbstub.a
 endif

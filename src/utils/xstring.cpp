@@ -1,11 +1,60 @@
 //taken from fceux on 10/27/08
+//subsequently modified for desmume
+
+/*
+	Copyright (C) 2008-2009 DeSmuME team
+
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 #include "xstring.h"
 #include <string>
 
+//a vc-style substring operation (very kind and lenient)
+std::string strsub(const std::string& str, int pos, int len) {
+	int strlen = str.size();
+	
+	if(strlen==0) return str; //empty strings always return empty strings
+	if(pos>=strlen) return str; //if you start past the end of the string, return the entire string. this is unusual, but there you have it
+
+	//clipping
+	if(pos<0) {
+		len += pos;
+		pos = 0;
+	}
+
+	if (pos+len>=strlen)
+		len=strlen-pos+1;
+	
+	//return str.str().substr(pos,len);
+	return str.substr(pos,len);
+}
+
+std::string strmid(const std::string& str, int pos, int len) { return strsub(str,pos,len); }
+std::string strleft(const std::string& str, int len) { return strsub(str,0,len); }
+std::string strright(const std::string& str, int len) { return len ? strsub(str,str.size()-len,len) : ""; }
+std::string toupper(const std::string& str)
+{
+	std::string ret = str;
+	for(u32 i=0;i<str.size();i++)
+		ret[i] = toupper(ret[i]);
+	return ret;
+}
+
 ///Upper case routine. Returns number of characters modified
 int str_ucase(char *str) {
-	unsigned int i=0,j=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0,j=0;
 
 	while (i < strlen(str)) {
 		if ((str[i] >= 'a') && (str[i] <= 'z')) {
@@ -20,7 +69,7 @@ int str_ucase(char *str) {
 
 ///Lower case routine. Returns number of characters modified
 int str_lcase(char *str) {
-	unsigned int i=0,j=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0,j=0;
 
 	while (i < strlen(str)) {
 		if ((str[i] >= 'A') && (str[i] <= 'Z')) {
@@ -38,7 +87,7 @@ int str_lcase(char *str) {
 ///Removes whitespace from left side of string, depending on the flags set (See STRIP_x definitions in xstring.h)
 ///Returns number of characters removed
 int str_ltrim(char *str, int flags) {
-	unsigned int i=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0;
 
 	while (str[0]) {
 		if ((str[0] != ' ') || (str[0] != '\t') || (str[0] != '\r') || (str[0] != '\n')) break;
@@ -69,7 +118,7 @@ int str_ltrim(char *str, int flags) {
 ///Removes whitespace from right side of string, depending on the flags set (See STRIP_x definitions in xstring.h)
 ///Returns number of characters removed
 int str_rtrim(char *str, int flags) {
-	unsigned int i=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0;
 
 	while (strlen(str)) {
 		if ((str[strlen(str)-1] != ' ') ||
@@ -103,7 +152,7 @@ int str_rtrim(char *str, int flags) {
 ///Removes whitespace depending on the flags set (See STRIP_x definitions in xstring.h)
 ///Returns number of characters removed, or -1 on error
 int str_strip(char *str, int flags) {
-	unsigned int i=0,j=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0,j=0;
 	char *astr,chr;
 
 	if (!strlen(str)) return -1;
@@ -130,7 +179,7 @@ int str_strip(char *str, int flags) {
 ///Replaces all instances of 'search' with 'replace'
 ///Returns number of characters modified
 int chr_replace(char *str, char search, char replace) {
-	unsigned int i=0,j=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0,j=0;
 
 	while (i < strlen(str)) {
 		if (str[i] == search) {
@@ -148,7 +197,7 @@ int chr_replace(char *str, char search, char replace) {
 ///Replaces all instances of 'search' with 'replace'
 ///Returns number of sub-strings modified, or -1 on error
 int str_replace(char *str, char *search, char *replace) {
-	unsigned int i=0,j=0; //mbg merge 7/17/06 changed to unsigned int
+	u32 i=0,j=0;
 	int searchlen,replacelen;
 	char *astr;
 
@@ -228,8 +277,8 @@ std::string BytesToString(const void* data, int len)
 			{
 				Base64Table[ input[0] >> 2 ],
 				Base64Table[ ((input[0] & 0x03) << 4) | (input[1] >> 4) ],
-				n<2 ? '=' : Base64Table[ ((input[1] & 0x0F) << 2) | (input[2] >> 6) ],
-				n<3 ? '=' : Base64Table[ input[2] & 0x3F ]
+				(unsigned char)(n<2 ? '=' : Base64Table[ ((input[1] & 0x0F) << 2) | (input[2] >> 6) ]),
+				(unsigned char)(n<3 ? '=' : Base64Table[ input[2] & 0x3F ])
 			};
 			ret.append(output, output+4);
 		}
@@ -293,9 +342,9 @@ bool StringToBytes(const std::string& str, void* data, int len)
 			}
 			unsigned char outpacket[3] =
 			{
-				(converted[0] << 2) | (converted[1] >> 4),
-				(converted[1] << 4) | (converted[2] >> 2),
-				(converted[2] << 6) | (converted[3])
+				(unsigned char)((converted[0] << 2) | (converted[1] >> 4)),
+				(unsigned char)((converted[1] << 4) | (converted[2] >> 2)),
+				(unsigned char)((converted[2] << 6) | (converted[3]))
 			};
 			int outlen = (input[2] == '=') ? 1 : (input[3] == '=' ? 2 : 3);
 			if(outlen > len) outlen = len;
@@ -558,7 +607,10 @@ std::string mass_replace(const std::string &source, const std::string &victim, c
 	std::string answer = source;
 	std::string::size_type j = 0;
 	while ((j = answer.find(victim, j)) != std::string::npos )
-	answer.replace(j, victim.length(), replacement);
+	{
+		answer.replace(j, victim.length(), replacement);
+		j+= replacement.length();
+	}
 	return answer;
 }
 
@@ -580,7 +632,8 @@ namespace UtfConverter
             if (res != conversionOK)
             {
                 delete [] widestringnative;
-                throw std::exception();
+                return NULL;
+                //throw std::exception();
             }
             *targetstart = 0;
             std::wstring resultstring(widestringnative);
@@ -593,12 +646,13 @@ namespace UtfConverter
             const UTF8* sourcestart = reinterpret_cast<const UTF8*>(utf8string.c_str());
             const UTF8* sourceend = sourcestart + widesize;
             UTF32* targetstart = reinterpret_cast<UTF32*>(widestringnative);
-            UTF32* targetend = targetstart + widesize;
+            UTF32* targetend = targetstart + widesize+1;
             ConversionResult res = ConvertUTF8toUTF32(&sourcestart, sourceend, &targetstart, targetend, strictConversion);
             if (res != conversionOK)
             {
                 delete [] widestringnative;
-                throw std::exception();
+                return NULL;
+                //throw std::exception();
             }
             *targetstart = 0;
             std::wstring resultstring(widestringnative);
@@ -607,7 +661,8 @@ namespace UtfConverter
         }
         else
         {
-            throw std::exception();
+        	return NULL;
+            //throw std::exception();
         }
         return L"";
     }
@@ -628,7 +683,8 @@ namespace UtfConverter
             if (res != conversionOK)
             {
                 delete [] utf8stringnative;
-                throw std::exception();
+                exit(1);
+                //throw std::exception();
             }
             *targetstart = 0;
             std::string resultstring(utf8stringnative);
@@ -647,7 +703,8 @@ namespace UtfConverter
             if (res != conversionOK)
             {
                 delete [] utf8stringnative;
-                throw std::exception();
+                exit(1);
+                //throw std::exception();
             }
             *targetstart = 0;
             std::string resultstring(utf8stringnative);
@@ -656,7 +713,7 @@ namespace UtfConverter
         }
         else
         {
-            throw std::exception();
+            //throw std::exception();
         }
         return "";
     }
@@ -665,11 +722,11 @@ namespace UtfConverter
 //convert a std::string to std::wstring
 std::wstring mbstowcs(std::string str)
 {
-	try {
+	//try {
 		return UtfConverter::FromUtf8(str);
-	} catch(std::exception) {
-		return L"(failed UTF-8 conversion)";
-	}
+	//} catch(std::exception) {
+		//return L"(failed UTF-8 conversion)";
+	//}
 }
 
 std::string wcstombs(std::wstring str)

@@ -1,51 +1,40 @@
-/*  AboutBox.cpp
+/*
+	Copyright (C) 2008 shash
+	Copyright (C) 2008-2015 DeSmuME team
 
-    Copyright (C) 2008-2009 shash
+	This file is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
 
-    This file is part of DeSmuME
+	This file is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    DeSmuME is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    DeSmuME is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with DeSmuME; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
+	You should have received a copy of the GNU General Public License
+	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-
-#include "../common.h"
-#include "version.h"
-
 #include "AboutBox.h"
+
+#include "../version.h"
+
 #include "resource.h"
 
 #define ABOUT_TIMER_ID 110222
-#define PER_PAGE_TEAM 23
-#define SIZE_SCROLL_BUFFER PER_PAGE_TEAM + TEAM
-const char	*team[] = { 
-	"Current Team",
-	"------------",
+const char	*team[] = {
+	"Original author\1",
+	"yopyop",
+	"",
+	"Current Team\1",
 	"Guillaume Duhamel",
 	"Normmatt",
-	"Bernat Muñoz (shash)",
-	"Riccardo Magliocchetti",
-	"Max Tabachenko (CrazyMax)",
 	"zeromus",
-	"Luigi__",
-	"adelikat",
-	"matusz",
-	"pa__",
-	"gocha",
+	"rogerman",
 	"",
-	"Contributors",
-	"------------",
+	"Contributors\1",
+	"Bernat Muñoz (shash)",
 	"Allustar",
 	"amponzi",
 	"Anthony Molinaro",
@@ -60,23 +49,79 @@ const char	*team[] = {
 	"Pascal Giard (evilynux)",
 	"Ben Jaques (masscat)",
 	"Jeff Bland",
-	"",
-	"Honorary Nagmasters",
-	"(Thanks to our super testers for this release!)",
-	"------------",
+	"matusz",
+	"nitsuja",
+	"gocha",
+	"pa__",
+	"adelikat",
+	"hi-coder",
+	"WinterMute",
+	"pengvado",
+	"dormito",
+	"ldesnogue",
+	"mtheall",
+	"thelemonman",
 	"nash679",
 	"pokefan999",
 	"dottorleo",
-	"lbalbalba",
-	"",
-	"average time from bug checkin to bugreport:",
-	"23 seconds",
+	"yki",
+	"Luigi__",
+	"CrazyMax",
+	"Riccardo Magliocchetti",
+	"CyberWarriorX",
+	"mic"
 };
 
-const int TEAM = ARRAY_SIZE(team);
+static HWND		gList = NULL;
+static RECT		gRc = {0};
+static s32		gPosY = 0;
+const u32		size = ARRAY_SIZE(team);
 
-u8	scroll_start;
-u8	scroll_buffer[SIZE_SCROLL_BUFFER][255];
+BOOL CALLBACK ListProc(HWND Dlg, UINT msg,WPARAM wparam,LPARAM lparam)
+{
+
+	switch (msg)
+	{
+		case WM_PAINT:
+			{
+				PAINTSTRUCT ps = {0};
+				
+				HDC hDC = BeginPaint(Dlg, &ps);
+				HDC hdcMem = CreateCompatibleDC(hDC);
+				HBITMAP hbmMem = CreateCompatibleBitmap(hDC, gRc.right, gRc.bottom);
+				HANDLE hOld   = SelectObject(hdcMem, hbmMem);
+				SetBkMode(hdcMem, TRANSPARENT);
+				SetTextAlign(hdcMem, TA_CENTER);
+				u32 x = gRc.right / 2;
+				FillRect(hdcMem, &gRc, (HBRUSH)COLOR_WINDOW);
+				SetTextColor(hdcMem, RGB(255, 0, 0));
+				for (u32 i = 0; i < size; i++)
+				{
+					s32 pos = gPosY+(i*20);
+					if (pos > gRc.bottom) break;
+					if (team[i][strlen(team[i])-1] == 1)
+					{
+						SetTextColor(hdcMem, RGB(255, 0, 0));
+						ExtTextOut(hdcMem, x, pos, ETO_CLIPPED, &gRc, team[i], strlen(team[i])-1, NULL);
+					}
+					else
+					{
+						SetTextColor(hdcMem, RGB(0, 0, 0));
+						ExtTextOut(hdcMem, x, pos, ETO_CLIPPED, &gRc, team[i], strlen(team[i]), NULL);
+					}
+					if ((i == size-1) && (pos < (s32)(gRc.top - 20))) gPosY = gRc.bottom;
+				}
+
+				BitBlt(hDC, 0, 0, gRc.right, gRc.bottom, hdcMem, 0, 0, SRCCOPY);
+				SelectObject(hdcMem, hOld);
+				DeleteObject(hbmMem);
+				DeleteDC(hdcMem);
+				EndPaint(Dlg, &ps);
+			}
+			return TRUE;
+	}
+	return FALSE;
+}
 
 BOOL CALLBACK AboutBox_Proc (HWND dialog, UINT message,WPARAM wparam,LPARAM lparam)
 {
@@ -84,24 +129,19 @@ BOOL CALLBACK AboutBox_Proc (HWND dialog, UINT message,WPARAM wparam,LPARAM lpar
 	{
 		case WM_INITDIALOG: 
 		{
-			char buf[2048];
-			memset(buf, 0, sizeof(buf));
-			wsprintf(buf, "version %s", DESMUME_VERSION_STRING DESMUME_COMPILER_DETAIL);
+			char buf[256] = {0};
+			memset(&buf[0], 0, sizeof(buf));
+			sprintf(buf, "DeSmuME%s", EMU_DESMUME_VERSION_STRING());
 			SetDlgItemText(dialog, IDC_TXT_VERSION, buf);
-
-			memset(buf, 0, sizeof(buf));
-			wsprintf(buf, "compiled: %s %s", __DATE__,__TIME__);
+			sprintf(buf, "compiled %s - %s %s", __DATE__, __TIME__, EMU_DESMUME_COMPILER_DETAIL());
 			SetDlgItemText(dialog, IDC_TXT_COMPILED, buf);
+			
+			gList = GetDlgItem(dialog, IDC_AUTHORS_LIST);
+			SetWindowLongPtr(gList, GWLP_WNDPROC, (LONG_PTR)ListProc);
+			GetClientRect(gList, &gRc);
+			gPosY = gRc.bottom;
 
-			for (int i = 0; i < SIZE_SCROLL_BUFFER; i++)
-				strcpy((char *)scroll_buffer[i], "\n");
-			for (int i = 0; i < TEAM; i++)
-			{
-				strcpy((char *)scroll_buffer[i + PER_PAGE_TEAM], team[i]);
-				strcat((char *)scroll_buffer[i + PER_PAGE_TEAM], "\n");
-			}
-			SetTimer(dialog, ABOUT_TIMER_ID, 400, (TIMERPROC) NULL);
-			scroll_start = 1;
+			SetTimer(dialog, ABOUT_TIMER_ID, 20, (TIMERPROC) NULL);
 			break;
 		}
 	
@@ -118,15 +158,8 @@ BOOL CALLBACK AboutBox_Proc (HWND dialog, UINT message,WPARAM wparam,LPARAM lpar
 
 		case WM_TIMER:
 		{
-			char buf[4096];
-			memset(buf, 0, sizeof(buf));
-			for (int i = 0; i < PER_PAGE_TEAM; i++)
-				if(i+scroll_start < SIZE_SCROLL_BUFFER)
-					strcat(buf, (char *)scroll_buffer[i + scroll_start]);
-			scroll_start++;
-			if (scroll_start >= SIZE_SCROLL_BUFFER)
-				scroll_start = 0;
-			SetDlgItemText(dialog, IDC_AUTHORS_LIST, buf);
+			gPosY--;
+			InvalidateRect(gList, &gRc, false);
 			break;
 		}
 	}
