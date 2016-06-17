@@ -143,9 +143,102 @@ int main(int argc, char **argv)
 
 	backup_setManualBackupType(0);
 
-	if (NDS_LoadROM( "sdmc:/game.nds", NULL) < 0) {
-		printf("Error loading game.nds\n");
-	}
+	hidScanInput();
+	u32 kHeld = hidKeysHeld();
+	switch (kHeld)
+		{
+		case KEY_DUP:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/d_up.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_DDOWN:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/d_down.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_DLEFT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/d_left.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_DRIGHT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/d_right.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CSTICK_UP:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cs_up.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CSTICK_DOWN:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cs_down.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CSTICK_LEFT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cs_left.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CSTICK_RIGHT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cs_right.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CPAD_UP:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cp_up.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CPAD_DOWN:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cp_down.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CPAD_LEFT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cp_left.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_CPAD_RIGHT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/cp_right.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_A:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/A.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_B:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/B.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_X:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/X.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_Y:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/Y.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_L:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/L.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_R:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/R.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_ZL:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/ZL.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_ZR:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/ZR.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_START:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/start.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		case KEY_SELECT:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/select.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		break;
+		default:
+		if (NDS_LoadROM( "sdmc:/DeSmuME/roms/default.nds", NULL) < 0) {
+			printf("Error loading ROM\n"); }
+		}
 	
 	execute = TRUE;
 
@@ -163,7 +256,6 @@ int main(int argc, char **argv)
 		int x,y;
 		
 
-		u32 kHeld = hidKeysHeld();
 		if((kHeld & KEY_A) && (kHeld & KEY_L) && (kHeld & KEY_R) && (kHeld & KEY_DOWN)){
 			break;
 		}
