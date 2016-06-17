@@ -8,6 +8,7 @@ It's currently a fully interpreted DS emulator, which means the performance is n
 How do I use this?
 ------------------------
 Put your ROMs in "root:/DeSmuME/roms"
+
 Assign your ROMs to the buttons shown:
 
 Default (no buttons held) - default.nds
