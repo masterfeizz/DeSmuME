@@ -16,3 +16,4 @@ Contributors
 * [DeSmuME](http://desmume.org/)
 * [DSonPSP](http://sourceforge.net/projects/donpsp/)
 * [Shutterbug2000](http://github.com/shutterbug2000)
+* [Robz8](http://github.com/Robz8)
