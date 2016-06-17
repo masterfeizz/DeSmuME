@@ -27,6 +27,7 @@
 #include "../render3D.h"
 #include "../rasterize.h"
 #include "../saves.h"
+#include "../slot2.h"
 #include "../mic.h"
 #include "../SPU.h"
 
@@ -126,13 +127,13 @@ int main(int argc, char **argv)
 	NDS_FillDefaultFirmwareConfigData(&fw_config);
 
   	NDS_Init();
-	if( access( "sdmc:/game.img", F_OK ) != -1 ) {
+	if( access( "sdmc:/DeSmuME/SD.IMG", F_OK ) != -1 ) {
 	
 	slot2_Init();
 	
 	slot2_Change(NDS_SLOT2_CFLASH);
 	
-	CFlash_Path = "sdmc:/game.img";
+	CFlash_Path = "sdmc:/DeSmuME/SD.IMG";
 	CFlash_Mode = ADDON_CFLASH_MODE_File;
 	}
 
@@ -143,6 +144,7 @@ int main(int argc, char **argv)
 
 	backup_setManualBackupType(0);
 
+	CommonSettings.loadToMemory = true;	// comment this to make commercial roms over 32MB work, while disabling the use of homebrew
 	hidScanInput();
 	u32 kHeld = hidKeysHeld();
 	switch (kHeld)
