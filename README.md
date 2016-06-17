@@ -50,8 +50,11 @@ Circle Pad Left - cp_left.nds
 Circle Pad Right - cp_right.nds
 
 C-Stick (New3DS only) Up - cs_up.nds
+
 C-Stick (New3DS only) Down - cs_down.nds
+
 C-Stick (New3DS only) Left - cs_left.nds
+
 C-Stick (New3DS only) Right - cs_right.nds
 
 
