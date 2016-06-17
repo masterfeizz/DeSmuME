@@ -902,9 +902,33 @@ int NDS_CreateDummyFirmware(NDS_fw_config_data *user_settings)
 	return TRUE ;
 }
 
+	FILE* iniprofile;
+	struct ProfileVars {
+		char default_nickname[9];	//"DeSmuME"
+		u8 profend1;
+		u16 profnl1;
+		char default_message[25];	//"DeSmuME makes you happy!"
+		u8 profend2;
+		u16 profnl2;
+		char fav_colour;
+		u8 profend3;
+		u16 profnl3;
+		char birth_day;
+		u8 profend4;
+		u16 profnl4;
+		char birth_month;
+		u8 profend5;
+		u16 profnl5;
+		char language;
+		u8 profend6;
+	} Profile;
+
 void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
-	const char *default_nickname = "DeSmuME";
-	const char *default_message = "DeSmuME makes you happy!";
+	iniprofile = fopen("sdmc:/DeSmuME/profile.ini","rb");
+	fread(&Profile,1,sizeof(Profile),iniprofile);
+
+	const char *default_nickname = Profile.default_nickname;
+	const char *default_message = Profile.default_message;
 	int i;
 	int str_length;
 
@@ -930,6 +954,8 @@ void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
 
 	//default to English
 	fw_config->language = 1;
+	
+	fclose(iniprofile);
 
 	// default touchscreen calibration
 
