@@ -905,29 +905,25 @@ int NDS_CreateDummyFirmware(NDS_fw_config_data *user_settings)
 	FILE* iniprofile;
 	struct ProfileVars {
 		char default_nickname[9];	//"DeSmuME"
-		u8 profend1;
 		u16 profnl1;
 		char default_message[25];	//"DeSmuME makes you happy!"
-		u8 profend2;
 		u16 profnl2;
-		char fav_colour;
-		u8 profend3;
+		u16 fav_colour;
 		u16 profnl3;
-		char birth_day;
-		u8 profend4;
+		u16 birth_day;
 		u16 profnl4;
-		char birth_month;
-		u8 profend5;
+		u16 birth_month;
 		u16 profnl5;
-		char language;
-		u8 profend6;
+		u16 language;
 	} Profile;
 
 void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
 	iniprofile = fopen("sdmc:/DeSmuME/profile.ini","rb");
 	fread(&Profile,1,sizeof(Profile),iniprofile);
 
+	Profile.default_nickname[10] = '\0';
 	const char *default_nickname = Profile.default_nickname;
+	Profile.default_message[26] = '\0';
 	const char *default_message = Profile.default_message;
 	int i;
 	int str_length;
@@ -935,7 +931,7 @@ void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
 	memset( fw_config, 0, sizeof(NDS_fw_config_data));
 	fw_config->ds_type = NDS_CONSOLE_TYPE_FAT;
 
-	fw_config->fav_colour = 7;
+	fw_config->fav_colour = 12;
 
 	fw_config->birth_day = 23;
 	fw_config->birth_month = 6;
