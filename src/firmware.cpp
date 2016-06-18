@@ -959,7 +959,7 @@ void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
 	fw_config->message_len = str_length;
 
 	//default to English
-	fw_config->language = 1;
+	fw_config->language = Profile.language;
 	
 	fclose(iniprofile);
 
