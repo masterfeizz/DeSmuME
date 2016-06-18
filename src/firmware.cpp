@@ -908,13 +908,16 @@ int NDS_CreateDummyFirmware(NDS_fw_config_data *user_settings)
 		u16 profnl1;
 		char default_message[25];	//"DeSmuME makes you happy!"
 		u16 profnl2;
-		u16 fav_colour;
+		u8 fav_colour1;	// First digit
+		u8 fav_colour2;	// Second digit
 		u16 profnl3;
-		u16 birth_day;
+		u8 birth_day1;	// First digit
+		u8 birth_day2;	// Second digit
 		u16 profnl4;
-		u16 birth_month;
+		u8 birth_month1;	// First digit
+		u8 birth_month2;	// Second digit
 		u16 profnl5;
-		u16 language;
+		u8 language;
 	} Profile;
 
 void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
@@ -931,10 +934,17 @@ void NDS_FillDefaultFirmwareConfigData(NDS_fw_config_data *fw_config) {
 	memset( fw_config, 0, sizeof(NDS_fw_config_data));
 	fw_config->ds_type = NDS_CONSOLE_TYPE_FAT;
 
-	fw_config->fav_colour = 12;
+	switch (Profile.fav_colour1)
+		{
+		case '1':
+			fw_config->fav_colour = Profile.fav_colour2 + 10;
+			break;
+		default:
+			fw_config->fav_colour = Profile.fav_colour2;
+		}
 
 	fw_config->birth_day = 23;
-	fw_config->birth_month = 6;
+	fw_config->birth_month = 5;
 
 	str_length = strlen( default_nickname);
 	for ( i = 0; i < str_length; i++) {
