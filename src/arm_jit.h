@@ -1,17 +1,14 @@
 /*	Copyright (C) 2006 yopyop
 	Copyright (C) 2011 Loren Merritt
 	Copyright (C) 2012-2013 DeSmuME team
-
 	This file is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
 	the Free Software Foundation, either version 3 of the License, or
 	(at your option) any later version.
-
 	This file is distributed in the hope that it will be useful,
 	but WITHOUT ANY WARRANTY; without even the implied warranty of
 	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 	GNU General Public License for more details.
-
 	You should have received a copy of the GNU General Public License
 	along with the this software.  If not, see <http://www.gnu.org/licenses/>.
 */
@@ -31,21 +28,9 @@ void arm_jit_close();
 void arm_jit_sync();
 template<int PROCNUM> u32 arm_jit_compile();
 
-//#define MAPPED_JIT_FUNCS: to define or not to define?
-//* x86 windows seems faster with NON-DEFINED
-//* x64 windows seems faster with DEFINED
-//* x86 windows seems to have problems without DEFINED when desmume is built as a dll due to the 
-//   ~300 MB .bss section created by the 256MB non-mapped compiled_funcs table
-//   (when loaded as a dll into a busy process, that much contiguous address space is hard to find. No big deal when starting up a process)
-//In principle, mapped compiled_funcs should be faster because it avoids some bit shifting logic to look it up from the memory map, right, 
-//but I guess it doesn't always work out that way.
-//
-//So here's my proposed policy. NON-DEFINED is dangerous due to the huge .bss section, so it should be the default
-//The build system should #define JIT_FUNCS_FLAT to make the flat array
-#ifndef JIT_FUNCS_FLAT
+#if defined(HOST_WINDOWS) || defined(DESMUME_COCOA)
 #define MAPPED_JIT_FUNCS
 #endif
-
 #ifdef MAPPED_JIT_FUNCS
 struct JIT_struct 
 {
@@ -69,9 +54,9 @@ extern CACHE_ALIGN JIT_struct JIT;
 #define JIT_MAPPED(adr, PROCNUM) JIT.JIT_MEM[PROCNUM][(adr)>>14]
 #else
 // actually an array of function pointers, but they fit in 32bit address space, so might as well save memory
-extern uintptr_t compiled_funcs[];
+extern u8 *compiled_funcs;
 // there isn't anything mapped between 07000000 and 0EFFFFFF, so we can mask off bit 27 and get away with a smaller array
-#define JIT_COMPILED_FUNC(adr, PROCNUM) compiled_funcs[((adr) & 0x07FFFFFE) >> 1]
+#define JIT_COMPILED_FUNC(adr, PROCNUM) *(uintptr_t*)&compiled_funcs[((adr) & 0x07FFFFFE) >> 1]
 #define JIT_COMPILED_FUNC_PREMASKED(adr, PROCNUM, ofs) JIT_COMPILED_FUNC(adr+(ofs<<1), PROCNUM)
 #define JIT_COMPILED_FUNC_KNOWNBANK(adr, bank, mask, ofs) JIT_COMPILED_FUNC(adr+(ofs<<1), PROCNUM)
 #define JIT_MAPPED(adr, PROCNUM) true

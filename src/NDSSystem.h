@@ -531,7 +531,7 @@ extern struct TCommonSettings {
 #ifdef HAVE_JIT
 		//zero 06-sep-2012 - shouldnt be defaulting this to true for now, since the jit is buggy. 
 		//id rather have people discover a bonus speedhack than discover new bugs in a new version
-		use_jit = false;
+		use_jit = true;
 #else
 		use_jit = false;
 #endif

@@ -21,6 +21,10 @@
 #include <stdio.h>
 #include <3ds.h>
 
+#include <malloc.h>
+
+#include "svchax.h"
+
 #include "../MMU.h"
 #include "../NDSSystem.h"
 #include "../debug.h"
@@ -34,13 +38,7 @@
 
 GFX3D *gfx3d;
 
-extern u32 __ctru_linear_heap_size;
-
 volatile bool execute = FALSE;
-
-#define NUM_FRAMES_TO_TIME 15
-
-#define FPS_LIMITER_FRAME_PERIOD 8
 
 unsigned int ABGR1555toRGBA8(unsigned short c)
 {
@@ -103,21 +101,30 @@ static void desmume_cycle()
     //SPU_Emulate_user();
 }
 
+u8 *compiled_funcs;
+
 int main(int argc, char **argv)
 {
-	osSetSpeedupEnable(true);
 
 	gfxSetDoubleBuffering(GFX_TOP, false);
 	gfxSetDoubleBuffering(GFX_BOTTOM, false);
 	gfxSet3D(false);
 
 	gfxInit(GSP_RGBA8_OES,GSP_RGBA8_OES,false);
-	//consoleInit(GFX_BOTTOM, NULL);
+	consoleInit(GFX_BOTTOM, NULL);
 
  	gfxSwapBuffersGpu();
 	gspWaitForVBlank();
 
+	osSetSpeedupEnable(false);
+   	svchax_init(true);
+   	osSetSpeedupEnable(true);
+
 	gfx3d = new GFX3D;
+
+	compiled_funcs = 0;
+
+    compiled_funcs = (u8*)malloc(1 << 26);
 
 	/* the firmware settings */
 	struct NDS_fw_config_data fw_config;
@@ -127,12 +134,12 @@ int main(int argc, char **argv)
 
   	NDS_Init();
 
-	/* Create the dummy firmware */
-	NDS_CreateDummyFirmware( &fw_config);
-
-	NDS_3D_ChangeCore(1);
+	NDS_3D_ChangeCore(0);
 
 	backup_setManualBackupType(0);
+
+	CommonSettings.use_jit = true;
+	CommonSettings.jit_max_block_size = 12;
 
 	if (NDS_LoadROM( "sdmc:/game.nds", NULL) < 0) {
 		printf("Error loading game.nds\n");
@@ -143,11 +150,12 @@ int main(int argc, char **argv)
 	u32 *tfb = (u32*)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
 	u32 *bfb = (u32*)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
 
-	while(aptMainLoop()) {
-		
-		NDS_SkipNextFrame();
-		NDS_exec<false>();
+	u64 time = osGetTime();
 
+	while(aptMainLoop()) {
+		printf("cycle\n");
+		
+		time = osGetTime();
 		desmume_cycle();
 
 		u16 * src = (u16 *)GPU->GetDisplayInfo().masterNativeBuffer;
@@ -162,7 +170,7 @@ int main(int argc, char **argv)
 		for(x=0; x<256; x++){
     		for(y=0; y<192;y++){
         		tfb[(((x + 72) * 240) + (191 - y))] = ABGR1555toRGBA8(src[( y * 256 ) + x]);
-        		bfb[(((x + 32)*240) + (239 - y))] = ABGR1555toRGBA8(src[( (y + 192) * 256 ) + x]);
+        		//bfb[(((x + 32)*240) + (239 - y))] = ABGR1555toRGBA8(src[( (y + 192) * 256 ) + x]);
     		}
 		}
 

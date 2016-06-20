@@ -155,7 +155,7 @@ public:
 
 		strncpy(pathToModule, pathStr.c_str(), MAX_PATH);
 #elif defined(_3DS)
-		strncpy(pathToModule, "desmume", MAX_PATH);
+		strncpy(pathToModule, ".", MAX_PATH);
 #else
 		char *cwd = g_build_filename(g_get_user_config_dir(), "desmume", NULL);
 		g_mkdir_with_parents(cwd, 0755);

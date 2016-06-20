@@ -44,7 +44,7 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations -Wfatal-errors \
 			-fomit-frame-pointer -ffunction-sections \
 			-ffast-math $(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DHAVE_LIBZ
+CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DHAVE_LIBZ -DHAVE_JIT
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 
@@ -137,9 +137,11 @@ SOURCES_CXX +=  armcpu.cpp \
 				metaspu/metaspu.cpp \
 				3ds/3ds_task.cpp \
 				3ds/main.cpp \
-				3ds/input.cpp
+				3ds/input.cpp \
+				3ds/arm_arm/arm_gen.cpp \
+				3ds/arm_arm/arm_jit.cpp
 
-CFILES		:= 
+CFILES		:= 3ds/svchax.c 3ds/heap.c 3ds/memory.c
 CPPFILES	:=
 SFILES		:=
 PICAFILES	:=
@@ -197,7 +199,7 @@ endif
 all: $(BUILD)
 
 $(BUILD):
-	@[ -d $@ ] || mkdir -p $@/utils/decrypt && mkdir -p $@/addons && mkdir -p $@/3ds && mkdir -p $@/utils/tinyxml && mkdir -p $@/utils/libfat && mkdir -p $@/metaspu
+	@[ -d $@ ] || mkdir -p $@/utils/decrypt && mkdir -p $@/addons && mkdir -p $@/3ds/arm_arm && mkdir -p $@/utils/tinyxml && mkdir -p $@/utils/libfat && mkdir -p $@/metaspu
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------

@@ -6359,7 +6359,6 @@ GPUSubsystem::~GPUSubsystem()
 
 GPUSubsystem* GPUSubsystem::Allocate()
 {
-	printf("GPUSubsystem::Allocate()\n");
 	return new GPUSubsystem();
 }
 

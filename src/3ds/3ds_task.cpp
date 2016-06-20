@@ -22,6 +22,11 @@
 // http://stackoverflow.com/questions/150355/programmatically-find-the-number-of-cores-on-a-machine
 int getOnlineCores (void)
 {
+	u8 isN3DS;
+	APT_CheckNew3DS(&isN3DS);
+	if(isN3DS)
+		return 3;
+
 	return 1;
 }
 
@@ -96,7 +101,7 @@ void Task::Impl::start(bool spinlock)
 	this->workFuncParam = NULL;
 	this->ret = NULL;
 	this->exitThread = false;
-	this->_thread = threadCreate(taskProc, this, 4 * 1024 * 1024, 0x18, -2, true);
+	this->_thread = threadCreate(taskProc, this, 4 * 1024 * 1024, 0x18, 2, true);
 	this->_isThreadRunning = true;
 
 }
@@ -124,7 +129,7 @@ void* Task::Impl::finish()
 	}
 
 	while (this->workFunc != NULL) {
-		svcSleepThread(10);
+		svcSleepThread(1);
 	}
 
 	returnValue = this->ret;

@@ -364,9 +364,9 @@ struct MMU_struct
 	u8 ARM9_ITCM[0x8000];
 	u8 ARM9_DTCM[0x4000];
 
-	//u8 MAIN_MEM[4*1024*1024]; //expanded from 4MB to 8MB to support debug consoles
+	u8 MAIN_MEM[4*1024*1024]; //expanded from 4MB to 8MB to support debug consoles
 	//u8 MAIN_MEM[8*1024*1024]; //expanded from 8MB to 16MB to support dsi
-	u8 MAIN_MEM[16*1024*1024]; //expanded from 8MB to 16MB to support dsi
+	//u8 MAIN_MEM[16*1024*1024]; //expanded from 8MB to 16MB to support dsi
 	u8 ARM9_REG[0x1000000]; //this variable is evil and should be removed by correctly emulating all registers.
 	u8 ARM9_BIOS[0x8000];
 	CACHE_ALIGN u8 ARM9_VMEM[0x800];
@@ -828,7 +828,9 @@ dunno:
 
 FORCEINLINE void _MMU_write08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const u32 addr, u8 val)
 {
+#ifdef DEBUG
 	CheckMemoryDebugEvent(DEBUG_EVENT_WRITE,AT,PROCNUM,addr,8,val);
+#endif
 
 	//special handling for DMA: discard writes to TCM
 	if(PROCNUM==ARMCPU_ARM9 && AT == MMU_AT_DMA)
@@ -841,9 +843,6 @@ FORCEINLINE void _MMU_write08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
 		if((addr&(~0x3FFF)) == MMU.DTCMRegion)
 		{
 			T1WriteByte(MMU.ARM9_DTCM, addr & 0x3FFF, val);
-#ifdef HAVE_LUA
-			CallRegisteredLuaMemHook(addr, 1, val, LUAMEMHOOK_WRITE);
-#endif
 			return;
 		}
 
@@ -852,17 +851,11 @@ FORCEINLINE void _MMU_write08(const int PROCNUM, const MMU_ACCESS_TYPE AT, const
 		JIT_COMPILED_FUNC_KNOWNBANK(addr, MAIN_MEM, _MMU_MAIN_MEM_MASK, 0) = 0;
 #endif
 		T1WriteByte( MMU.MAIN_MEM, addr & _MMU_MAIN_MEM_MASK, val);
-#ifdef HAVE_LUA
-		CallRegisteredLuaMemHook(addr, 1, val, LUAMEMHOOK_WRITE);
-#endif
 		return;
 	}
 
 	if(PROCNUM==ARMCPU_ARM9) _MMU_ARM9_write08(addr,val);
 	else _MMU_ARM7_write08(addr,val);
-#ifdef HAVE_LUA
-	CallRegisteredLuaMemHook(addr, 1, val, LUAMEMHOOK_WRITE);
-#endif
 }
 
 FORCEINLINE void _MMU_write16(const int PROCNUM, const MMU_ACCESS_TYPE AT, const u32 addr, u16 val)

@@ -1824,8 +1824,8 @@ static /*donotinline*/ std::pair<s32,s32> armInnerLoop(
 		{
 			if(!NDS_ARM9.waitIRQ&&!nds.freezeBus)
 			{
-				arm9log();
-				debug();
+				//arm9log();
+				//debug();
 #ifdef HAVE_JIT
 				arm9 += armcpu_exec<ARMCPU_ARM9,jit>();
 #else
@@ -2357,7 +2357,6 @@ bool NDS_FakeBoot()
 	//EDIT - whats dummy firmware and how is relating to the above?
 	//it seems to be emplacing basic firmware data into MMU.fw.data
 	NDS_CreateDummyFirmware(&CommonSettings.fw_config);
-	
 	//firmware loads the game card arm9 and arm7 programs as specified in rom header
 	{
 		bool hasSecureArea = ((gameInfo.romType == ROM_NDS) && (gameInfo.header.CRC16 != 0));
@@ -2367,7 +2366,7 @@ bool NDS_FakeBoot()
 		for(u32 i = 0; i < header->ARM9binSize; i+=4)
 		{
 			u32 tmp = (hasSecureArea && ((src >= 0x4000) && (src < 0x8000)))?LE_TO_LOCAL_32(*(u32*)(gameInfo.secureArea + (src - 0x4000))):gameInfo.readROM(src);
-
+			//printf("_MMU_write32<ARMCPU_ARM9>(dst, tmp)\n");
 			_MMU_write32<ARMCPU_ARM9>(dst, tmp);
 
 			dst += 4;
@@ -2379,6 +2378,7 @@ bool NDS_FakeBoot()
 		dst = header->ARM7cpy;
 		for(u32 i = 0; i < header->ARM7binSize; i+=4)
 		{
+			//printf("_MMU_write32<ARMCPU_ARM7>(dst, tmp)\n");
 			_MMU_write32<ARMCPU_ARM7>(dst, gameInfo.readROM(src));
 
 			dst += 4;
@@ -2396,8 +2396,9 @@ bool NDS_FakeBoot()
 	//it seems to be copying the MMU.fw.data data into RAM in the user memory stash locations
 	u8 temp_buffer[NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT];
 	if ( copy_firmware_user_data( temp_buffer, MMU.fw.data)) {
-		for ( int fw_index = 0; fw_index < NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT; fw_index++)
+		for ( int fw_index = 0; fw_index < NDS_FW_USER_SETTINGS_MEM_BYTE_COUNT; fw_index++){
 			_MMU_write08<ARMCPU_ARM9>(0x027FFC80 + fw_index, temp_buffer[fw_index]);
+		}
 	}
 
 	//something copies the whole header to Main RAM 0x27FFE00 on startup. (http://nocash.emubase.de/gbatek.htm#dscartridgeheader)
@@ -2573,6 +2574,7 @@ void NDS_Reset()
 		bootResult = NDS_LegitBoot();
 	else
 		bootResult = NDS_FakeBoot();
+
 
 	// Init calibration info
 	memcpy(&TSCal, firmware->getTouchCalibrate(), sizeof(TSCalInfo));
