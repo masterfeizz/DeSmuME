@@ -19,7 +19,6 @@
 
 #include "../utils/task.h"
 
-// http://stackoverflow.com/questions/150355/programmatically-find-the-number-of-cores-on-a-machine
 int getOnlineCores (void)
 {
 	return 1;
@@ -96,15 +95,13 @@ void Task::Impl::start(bool spinlock)
 	this->workFuncParam = NULL;
 	this->ret = NULL;
 	this->exitThread = false;
-	this->_thread = threadCreate(taskProc, this, 4 * 1024 * 1024, 0x18, -2, true);
+	this->_thread = threadCreate(taskProc, this, 4 * 1024 * 1024, 0x18, 2, true);
 	this->_isThreadRunning = true;
 
 }
 
 void Task::Impl::execute(const TWork &work, void *param)
 {
-	printf("execute");
-
 	if (work == NULL || !this->_isThreadRunning) {
 		return;
 	}
@@ -124,7 +121,7 @@ void* Task::Impl::finish()
 	}
 
 	while (this->workFunc != NULL) {
-		svcSleepThread(10);
+		svcSleepThread(1);
 	}
 
 	returnValue = this->ret;

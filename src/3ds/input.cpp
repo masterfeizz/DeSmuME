@@ -21,9 +21,17 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#include <3ds.h>
 #include "input.h"
 #include "NDSSystem.h"
+
+#define BIT(n) (1U<<(n))
+
+extern "C" {
+  void hidScanInput(void);
+  uint32_t hidKeysHeld(void);
+  uint32_t hidKeysDown(void);
+  uint32_t hidKeysUp(void);
+}
 
  /* Update NDS keypad */
 void update_keypad(u16 keys)
