@@ -366,7 +366,11 @@ struct MMU_struct
 
 	//u8 MAIN_MEM[4*1024*1024]; //expanded from 4MB to 8MB to support debug consoles
 	//u8 MAIN_MEM[8*1024*1024]; //expanded from 8MB to 16MB to support dsi
+	#ifdef _3DS
+	u8 MAIN_MEM[4*1024*1024];
+	#else
 	u8 MAIN_MEM[16*1024*1024]; //expanded from 8MB to 16MB to support dsi
+	#endif
 	u8 ARM9_REG[0x1000000]; //this variable is evil and should be removed by correctly emulating all registers.
 	u8 ARM9_BIOS[0x8000];
 	CACHE_ALIGN u8 ARM9_VMEM[0x800];

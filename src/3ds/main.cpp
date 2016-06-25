@@ -19,7 +19,17 @@
 * Boston, MA 02111-1307, USA.
 */
 #include <stdio.h>
-#include <3ds.h>
+
+
+//DIRTY FIX FOR CONFLICTING TYPEDEFS
+namespace ctrulib {
+
+	#include <3ds.h>
+	#include "svchax.h"
+
+}
+
+#include <malloc.h>
 
 #include "../MMU.h"
 #include "../NDSSystem.h"
@@ -32,15 +42,13 @@
 
 #include "input.h"
 
+#define FRAMESKIP 1
+
+using namespace ctrulib;
+
 GFX3D *gfx3d;
 
-extern u32 __ctru_linear_heap_size;
-
 volatile bool execute = FALSE;
-
-#define NUM_FRAMES_TO_TIME 15
-
-#define FPS_LIMITER_FRAME_PERIOD 8
 
 unsigned int ABGR1555toRGBA8(unsigned short c)
 {
@@ -61,10 +69,6 @@ SoundInterface_struct *SNDCoreList[] = {
   &SNDDummy,
   NULL
 };
-
-int savetype=MC_TYPE_AUTODETECT;
-u32 savesize=1;
-
 
 const char * save_type_names[] = {
 	"Autodetect",
@@ -105,7 +109,6 @@ static void desmume_cycle()
 
 int main(int argc, char **argv)
 {
-	osSetSpeedupEnable(true);
 
 	gfxSetDoubleBuffering(GFX_TOP, false);
 	gfxSetDoubleBuffering(GFX_BOTTOM, false);
@@ -117,6 +120,10 @@ int main(int argc, char **argv)
  	gfxSwapBuffersGpu();
 	gspWaitForVBlank();
 
+	osSetSpeedupEnable(false);
+   	svchax_init(true);
+   	osSetSpeedupEnable(true);
+
 	gfx3d = new GFX3D;
 
 	/* the firmware settings */
@@ -127,12 +134,18 @@ int main(int argc, char **argv)
 
   	NDS_Init();
 
-	/* Create the dummy firmware */
-	NDS_CreateDummyFirmware( &fw_config);
-
 	NDS_3D_ChangeCore(1);
 
 	backup_setManualBackupType(0);
+
+	#ifdef HAVE_JIT
+
+	CommonSettings.use_jit = true;
+	CommonSettings.jit_max_block_size = 12;
+
+	#endif
+
+	CommonSettings.ConsoleType = NDS_CONSOLE_TYPE_FAT;
 
 	if (NDS_LoadROM( "sdmc:/game.nds", NULL) < 0) {
 		printf("Error loading game.nds\n");
@@ -140,21 +153,24 @@ int main(int argc, char **argv)
 	
 	execute = TRUE;
 
-	u32 *tfb = (u32*)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-	u32 *bfb = (u32*)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
+	uint32_t *tfb = (uint32_t*)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+	uint32_t *bfb = (uint32_t*)gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
+
 
 	while(aptMainLoop()) {
-		
-		NDS_SkipNextFrame();
-		NDS_exec<false>();
 
+		for(int i=0; i < FRAMESKIP; i++){
+			NDS_SkipNextFrame();
+			NDS_exec<false>();
+		}
+		
 		desmume_cycle();
 
-		u16 * src = (u16 *)GPU->GetDisplayInfo().masterNativeBuffer;
+		uint16_t * src = (uint16_t *)GPU->GetDisplayInfo().masterNativeBuffer;
 		int x,y;
 		
 
-		u32 kHeld = hidKeysHeld();
+		uint32_t kHeld = hidKeysHeld();
 		if((kHeld & KEY_A) && (kHeld & KEY_L) && (kHeld & KEY_R) && (kHeld & KEY_DOWN)){
 			break;
 		}

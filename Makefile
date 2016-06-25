@@ -33,6 +33,7 @@ SOURCES		:=	src
 DATA		:=	data
 INCLUDES	:=	src src/windows/agg/include
 APP_TITLE	:=  DeSmuME
+APP_AUTHOR  :=  MasterFeizz
 #ROMFS		:=	romfs
 
 #---------------------------------------------------------------------------------
@@ -41,12 +42,11 @@ APP_TITLE	:=  DeSmuME
 ARCH	:=	-march=armv6k -mtune=mpcore -mfloat-abi=hard
 
 CFLAGS	:=	-g -Wall -O2 -mword-relocations -Wfatal-errors \
-			-fomit-frame-pointer -ffunction-sections \
-			-ffast-math $(ARCH)
+			-fomit-frame-pointer  $(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DHAVE_LIBZ
+CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DHAVE_LIBZ -DHAVE_JIT
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -fpermissive
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -119,8 +119,10 @@ SOURCES_CXX +=  armcpu.cpp \
 				utils/fsnitro.cpp \
 				utils/dlditool.cpp \
 				utils/emufat.cpp \
+				utils/guid.cpp \
 				utils/decrypt/decrypt.cpp \
 				utils/decrypt/header.cpp \
+				utils/decrypt/crc.cpp \
 				utils/tinyxml/tinyxml.cpp \
 				utils/tinyxml/tinystr.cpp \
 				utils/tinyxml/tinyxmlerror.cpp \
@@ -134,12 +136,16 @@ SOURCES_CXX +=  armcpu.cpp \
 				utils/libfat/file_allocation_table.cpp \
 				utils/libfat/libfat.cpp \
 				utils/libfat/libfat_public_api.cpp \
+				utils/libfat/lock.cpp \
+				utils/libfat/partition.cpp \
 				metaspu/metaspu.cpp \
 				3ds/3ds_task.cpp \
 				3ds/main.cpp \
-				3ds/input.cpp
+				3ds/input.cpp \
+				arm-common/arm_gen.cpp \
+				arm-common/arm_jit.cpp
 
-CFILES		:= 
+CFILES		:= 3ds/svchax.c 3ds/heap.c 3ds/memory.c utils/ConvertUTF.c 
 CPPFILES	:=
 SFILES		:=
 PICAFILES	:=
@@ -197,7 +203,7 @@ endif
 all: $(BUILD)
 
 $(BUILD):
-	@[ -d $@ ] || mkdir -p $@/utils/decrypt && mkdir -p $@/addons && mkdir -p $@/3ds && mkdir -p $@/utils/tinyxml && mkdir -p $@/utils/libfat && mkdir -p $@/metaspu
+	@[ -d $@ ] || mkdir -p $@/utils/decrypt && mkdir -p $@/addons && mkdir -p $@/arm-common && mkdir -p $@/utils/tinyxml && mkdir -p $@/utils/libfat && mkdir -p $@/metaspu && mkdir -p $@/3ds
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------

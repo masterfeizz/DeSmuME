@@ -983,9 +983,9 @@ bool mov_loadstate(EMUFILE* fp, int size)
 			// this is a mode that behaves like "inactive"
 			// except it permits switching to play/record by loading an earlier savestate.
 			// (and we continue to store the finished movie in savestates made while finished)
-			osd->setLineColor(255,0,0); // let's make the text red too to hopefully catch the user's attention a bit.
+			//osd->setLineColor(255,0,0); // let's make the text red too to hopefully catch the user's attention a bit.
 			FinishPlayback();
-			osd->setLineColor(255,255,255);
+			//osd->setLineColor(255,255,255);
 
 			//FCEU_PrintError("Savestate is from a frame (%d) after the final frame in the movie (%d). This is not permitted.", currFrameCounter, currMovieData.records.size()-1);
 			//return false;
@@ -1023,8 +1023,8 @@ bool mov_loadstate(EMUFILE* fp, int size)
 			openRecordingMovie(curMovieFilename);
 			if(!osRecordingMovie)
 			{
-			   osd->setLineColor(255, 0, 0);
-			   osd->addLine("Can't save movie file!");
+			   //osd->setLineColor(255, 0, 0);
+			   //osd->addLine("Can't save movie file!");
 			}
 
 			//printf("DUMPING MOVIE: %d FRAMES\n",currMovieData.records.size());
