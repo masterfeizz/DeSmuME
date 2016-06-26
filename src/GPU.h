@@ -1305,38 +1305,34 @@ protected:
 	template<GPULayerID LAYERID, bool ISDEBUGRENDER, bool MOSAIC, bool ISCUSTOMRENDERINGNEEDED> void* _RenderLine_LayerBG_ApplyMosaic(void *dstColorLine, const u16 lineIndex);
 	template<GPULayerID LAYERID, bool ISDEBUGRENDER, bool ISCUSTOMRENDERINGNEEDED> void* _RenderLine_LayerBG(void *dstColorLine, const u16 lineIndex);
 			
-	template<GPULayerID LAYERID, bool ISDEBUGRENDER, bool NOWINDOWSENABLEDHINT, bool COLOREFFECTDISABLEDHINT> FORCEINLINE void _RenderPixel(const size_t srcX, const u16 src, const u8 srcAlpha, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
-	FORCEINLINE void _RenderPixel3D(const size_t srcX, const FragmentColor src, const NDSColorFormat srcFormat, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
+	template<NDSColorFormat OUTPUTFORMAT, GPULayerID LAYERID, bool ISDEBUGRENDER, bool NOWINDOWSENABLEDHINT, bool COLOREFFECTDISABLEDHINT> FORCEINLINE void _RenderPixel(const size_t srcX, const u16 src, const u8 srcAlpha, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
+	template<NDSColorFormat OUTPUTFORMAT, NDSColorFormat SRCFORMAT> FORCEINLINE void _RenderPixel3D(const size_t srcX, const FragmentColor src, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
 	
 	FORCEINLINE u16 _ColorEffectBlend(const u16 colA, const u16 colB, const u16 blendEVA, const u16 blendEVB);
 	FORCEINLINE u16 _ColorEffectBlend(const u16 colA, const u16 colB, const TBlendTable *blendTable);
-	template<NDSColorFormat COLORFORMAT> FORCEINLINE FragmentColor _ColorEffectBlend(const u16 colA, const FragmentColor colB, const u16 blendEVA, const u16 blendEVB);
+	template<NDSColorFormat COLORFORMATB> FORCEINLINE FragmentColor _ColorEffectBlend(const u16 colA, const FragmentColor colB, const u16 blendEVA, const u16 blendEVB);
 	
-	FORCEINLINE u16 _ColorEffectBlend3D(const FragmentColor colA, const u16 colB);
+	template<NDSColorFormat COLORFORMATA> FORCEINLINE u16 _ColorEffectBlend3D(const FragmentColor colA, const u16 colB);
 	template<NDSColorFormat COLORFORMATA, NDSColorFormat COLORFORMATB> FORCEINLINE FragmentColor _ColorEffectBlend3D(const FragmentColor colA, const FragmentColor colB);
 	
 	FORCEINLINE u16 _ColorEffectIncreaseBrightness(const u16 col);
 	FORCEINLINE u16 _ColorEffectIncreaseBrightness(const u16 col, const u16 blendEVY);
-	template<NDSColorFormat INPUTFORMAT> FORCEINLINE u16 _ColorEffectIncreaseBrightness(const FragmentColor col, const u16 blendEVY);
-	template<NDSColorFormat OUTPUTFORMAT> FORCEINLINE FragmentColor _ColorEffectIncreaseBrightness(const u16 col, const u16 blendEVY);
-	template<NDSColorFormat OUTPUTFORMAT, NDSColorFormat INPUTFORMAT> FORCEINLINE FragmentColor _ColorEffectIncreaseBrightness(const FragmentColor col, const u16 blendEVY);
+	template<NDSColorFormat COLORFORMAT> FORCEINLINE FragmentColor _ColorEffectIncreaseBrightness(const FragmentColor col, const u16 blendEVY);
 	
 	FORCEINLINE u16 _ColorEffectDecreaseBrightness(const u16 col);
 	FORCEINLINE u16 _ColorEffectDecreaseBrightness(const u16 col, const u16 blendEVY);
-	template<NDSColorFormat INPUTFORMAT> FORCEINLINE u16 _ColorEffectDecreaseBrightness(const FragmentColor col, const u16 blendEVY);
-	template<NDSColorFormat OUTPUTFORMAT> FORCEINLINE FragmentColor _ColorEffectDecreaseBrightness(const u16 col, const u16 blendEVY);
-	template<NDSColorFormat OUTPUTFORMAT, NDSColorFormat INPUTFORMAT> FORCEINLINE FragmentColor _ColorEffectDecreaseBrightness(const FragmentColor col, const u16 blendEVY);
+	FORCEINLINE FragmentColor _ColorEffectDecreaseBrightness(const FragmentColor col, const u16 blendEVY);
 	
 #ifdef ENABLE_SSE2
 	FORCEINLINE __m128i _ColorEffectBlend(const __m128i &colA, const __m128i &colB, const __m128i &blendEVA, const __m128i &blendEVB);
-	FORCEINLINE __m128i _ColorEffectBlend3D(const __m128i &colA_Lo, const __m128i &colA_Hi, const __m128i &colB);
-	FORCEINLINE __m128i _ColorEffectIncreaseBrightness(const __m128i &col, const __m128i &blendEVY);
-	FORCEINLINE __m128i _ColorEffectDecreaseBrightness(const __m128i &col, const __m128i &blendEVY);
+	template<NDSColorFormat COLORFORMATA, NDSColorFormat COLORFORMATB> FORCEINLINE __m128i _ColorEffectBlend3D(const __m128i &colA_Lo, const __m128i &colA_Hi, const __m128i &colB);
+	template<NDSColorFormat COLORFORMAT> FORCEINLINE __m128i _ColorEffectIncreaseBrightness(const __m128i &col, const __m128i &blendEVY);
+	template<NDSColorFormat COLORFORMAT> FORCEINLINE __m128i _ColorEffectDecreaseBrightness(const __m128i &col, const __m128i &blendEVY);
 	template<GPULayerID LAYERID, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel_CheckWindows16_SSE2(const size_t dstX, __m128i &didPassWindowTest, __m128i &enableColorEffect) const;
 	template<GPULayerID LAYERID, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel_CheckWindows8_SSE2(const size_t dstX, __m128i &didPassWindowTest, __m128i &enableColorEffect) const;
-	template<GPULayerID LAYERID, bool ISDEBUGRENDER, bool NOWINDOWSENABLEDHINT, bool COLOREFFECTDISABLEDHINT, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel16_SSE2(const size_t dstX, const __m128i &srcColorHi_vec128, const __m128i &srcColorLo_vec128, const __m128i &srcOpaqueMask, const u8 *__restrict srcAlpha, u16 *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
-	template <GPULayerID LAYERID, bool ISDEBUGRENDER, bool NOWINDOWSENABLEDHINT, bool COLOREFFECTDISABLEDHINT, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel8_SSE2(const size_t dstX, const __m128i &srcColor_vec128, const __m128i &srcOpaqueMask, const u8 *__restrict srcAlpha, u16 *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
-	template<bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel3D_SSE2(const size_t srcX, const FragmentColor *__restrict src, u16 *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
+	template<GPULayerID LAYERID, bool ISDEBUGRENDER, bool NOWINDOWSENABLEDHINT, bool COLOREFFECTDISABLEDHINT, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel16_SSE2(const size_t dstX, const __m128i &srcColorHi_vec128, const __m128i &srcColorLo_vec128, const __m128i &srcOpaqueMask, const u8 *__restrict srcAlpha, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
+	template<GPULayerID LAYERID, bool ISDEBUGRENDER, bool NOWINDOWSENABLEDHINT, bool COLOREFFECTDISABLEDHINT, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel8_SSE2(const size_t dstX, const __m128i &srcColor_vec128, const __m128i &srcOpaqueMask, const u8 *__restrict srcAlpha, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
+	template<NDSColorFormat OUTPUTFORMAT, NDSColorFormat SRCFORMAT, bool ISCUSTOMRENDERINGNEEDED> FORCEINLINE void _RenderPixel3D_SSE2(const size_t srcX, const FragmentColor *__restrict src, void *__restrict dstColorLine, u8 *__restrict dstLayerIDLine);
 #endif
 	
 	template<bool ISDEBUGRENDER> void _RenderSpriteBMP(const u8 spriteNum, const u16 l, u16 *__restrict dst, const u32 srcadr, u8 *__restrict dst_alpha, u8 *__restrict typeTab, u8 *__restrict prioTab, const u8 prio, const size_t lg, size_t sprX, size_t x, const s32 xdir, const u8 alpha);
@@ -1455,13 +1451,14 @@ protected:
 	template<size_t CAPTURELENGTH> void _RenderLine_DisplayCapture(const void *renderedLineSrcA, const u16 l);
 	void _RenderLine_DispCapture_FIFOToBuffer(u16 *fifoLineBuffer);
 	
-	template<int SOURCESWITCH, size_t CAPTURELENGTH, bool CAPTUREFROMNATIVESRC, bool CAPTURETONATIVEDST>
-	void _RenderLine_DispCapture_Copy(const u16 *src, u16 *dst, const size_t captureLengthExt, const size_t captureLineCount); // Do not use restrict pointers, since src and dst can be the same
+	template<NDSColorFormat COLORFORMAT, int SOURCESWITCH, size_t CAPTURELENGTH, bool CAPTUREFROMNATIVESRC, bool CAPTURETONATIVEDST>
+	void _RenderLine_DispCapture_Copy(const void *src, void *dst, const size_t captureLengthExt, const size_t captureLineCount); // Do not use restrict pointers, since src and dst can be the same
 	
 	u16 _RenderLine_DispCapture_BlendFunc(const u16 srcA, const u16 srcB, const u8 blendEVA, const u8 blendEVB);
+	template<NDSColorFormat COLORFORMAT> FragmentColor _RenderLine_DispCapture_BlendFunc(const FragmentColor srcA, const FragmentColor srcB, const u8 blendEVA, const u8 blendEVB);
 	
 #ifdef ENABLE_SSE2
-	__m128i _RenderLine_DispCapture_BlendFunc_SSE2(__m128i &srcA, __m128i &srcB, const __m128i &blendEVA, const __m128i &blendEVB);
+	template<NDSColorFormat COLORFORMAT> __m128i _RenderLine_DispCapture_BlendFunc_SSE2(const __m128i &srcA, const __m128i &srcB, const __m128i &blendEVA, const __m128i &blendEVB);
 #endif
 	
 	template<bool CAPTUREFROMNATIVESRCA, bool CAPTUREFROMNATIVESRCB>
@@ -1629,11 +1626,358 @@ public:
 extern GPUSubsystem *GPU;
 extern MMU_struct MMU;
 
+extern CACHE_ALIGN const u32 material_5bit_to_31bit[32];
+extern CACHE_ALIGN const u8 material_5bit_to_6bit[32];
+extern CACHE_ALIGN const u8 material_5bit_to_8bit[32];
+extern CACHE_ALIGN const u8 material_6bit_to_8bit[64];
+extern CACHE_ALIGN const u8 material_3bit_to_5bit[8];
+extern CACHE_ALIGN const u8 material_3bit_to_6bit[8];
+extern CACHE_ALIGN const u8 material_3bit_to_8bit[8];
+
+extern CACHE_ALIGN u32 color_555_to_6665_opaque[32768];
+extern CACHE_ALIGN u32 color_555_to_6665_opaque_swap_rb[32768];
+extern CACHE_ALIGN u32 color_555_to_666[32768];
+extern CACHE_ALIGN u32 color_555_to_8888_opaque[32768];
+extern CACHE_ALIGN u32 color_555_to_8888_opaque_swap_rb[32768];
+extern CACHE_ALIGN u32 color_555_to_888[32768];
+
+#define COLOR555TO6665_OPAQUE(col) (color_555_to_6665_opaque[(col)])					// Convert a 15-bit color to an opaque sparsely packed 32-bit color containing an RGBA6665 color
+#define COLOR555TO6665_OPAQUE_SWAP_RB(col) (color_555_to_6665_opaque_swap_rb[(col)])	// Convert a 15-bit color to an opaque sparsely packed 32-bit color containing an RGBA6665 color with R and B components swapped
+#define COLOR555TO666(col) (color_555_to_666[(col)])									// Convert a 15-bit color to a fully transparent sparsely packed 32-bit color containing an RGBA6665 color
+
+#ifdef LOCAL_LE
+	#define COLOR555TO6665(col,alpha5) (((alpha5)<<24) | color_555_to_666[(col)])		// Convert a 15-bit color to a sparsely packed 32-bit color containing an RGBA6665 color with user-defined alpha, little-endian
+#else
+	#define COLOR555TO6665(col,alpha5) ((alpha5) | color_555_to_666[(col)])				// Convert a 15-bit color to a sparsely packed 32-bit color containing an RGBA6665 color with user-defined alpha, big-endian
+#endif
+
+#define COLOR555TO8888_OPAQUE(col) (color_555_to_8888_opaque[(col)])					// Convert a 15-bit color to an opaque 32-bit color
+#define COLOR555TO8888_OPAQUE_SWAP_RB(col) (color_555_to_8888_opaque_swap_rb[(col)])	// Convert a 15-bit color to an opaque 32-bit color with R and B components swapped
+#define COLOR555TO888(col) (color_555_to_888[(col)])									// Convert a 15-bit color to an opaque 24-bit color or a fully transparent 32-bit color
+
+#ifdef LOCAL_LE
+	#define COLOR555TO8888(col,alpha8) (((alpha8)<<24) | color_555_to_888[(col)])		// Convert a 15-bit color to a 32-bit color with user-defined alpha, little-endian
+#else
+	#define COLOR555TO8888(col,alpha8) ((alpha8) | color_555_to_888[(col)])				// Convert a 15-bit color to a 32-bit color with user-defined alpha, big-endian
+#endif
+
+//produce a 15bpp color from individual 5bit components
+#define R5G5B5TORGB15(r,g,b) ( (r) | ((g)<<5) | ((b)<<10) )
+
+//produce a 16bpp color from individual 5bit components
+#define R6G6B6TORGB15(r,g,b) ( ((r)>>1) | (((g)&0x3E)<<4) | (((b)&0x3E)<<9) )
+
 inline FragmentColor MakeFragmentColor(const u8 r, const u8 g, const u8 b, const u8 a)
 {
 	FragmentColor ret;
 	ret.r = r; ret.g = g; ret.b = b; ret.a = a;
 	return ret;
 }
+
+template <bool SWAP_RB>
+FORCEINLINE u32 ConvertColor555To8888Opaque(const u16 src)
+{
+	return (SWAP_RB) ? COLOR555TO8888_OPAQUE_SWAP_RB(src & 0x7FFF) : COLOR555TO8888_OPAQUE(src & 0x7FFF);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u32 ConvertColor555To6665Opaque(const u16 src)
+{
+	return (SWAP_RB) ? COLOR555TO6665_OPAQUE_SWAP_RB(src & 0x7FFF) : COLOR555TO6665_OPAQUE(src & 0x7FFF);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u32 ConvertColor8888To6665(FragmentColor srcColor)
+{
+	FragmentColor outColor;
+	outColor.r = ((SWAP_RB) ? srcColor.b : srcColor.r) >> 2;
+	outColor.g = srcColor.g >> 2;
+	outColor.b = ((SWAP_RB) ? srcColor.r : srcColor.b) >> 2;
+	outColor.a = srcColor.a >> 3;
+	
+	return outColor.color;
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u32 ConvertColor8888To6665(u32 srcColor)
+{
+	FragmentColor srcColorComponent;
+	srcColorComponent.color = srcColor;
+	
+	return ConvertColor8888To6665<SWAP_RB>(srcColorComponent);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u32 ConvertColor6665To8888(FragmentColor srcColor)
+{
+	FragmentColor outColor;
+	outColor.r = material_6bit_to_8bit[((SWAP_RB) ? srcColor.b : srcColor.r)];
+	outColor.g = material_6bit_to_8bit[srcColor.g];
+	outColor.b = material_6bit_to_8bit[((SWAP_RB) ? srcColor.r : srcColor.b)];
+	outColor.a = material_5bit_to_8bit[srcColor.a];
+	
+	return outColor.color;
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u32 ConvertColor6665To8888(u32 srcColor)
+{
+	FragmentColor srcColorComponent;
+	srcColorComponent.color = srcColor;
+	
+	return ConvertColor6665To8888<SWAP_RB>(srcColorComponent);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u16 ConvertColor8888To5551(FragmentColor srcColor)
+{
+	return R5G5B5TORGB15( ((SWAP_RB) ? srcColor.b : srcColor.r) >> 3, srcColor.g >> 3, ((SWAP_RB) ? srcColor.r : srcColor.b) >> 3) | ((srcColor.a == 0) ? 0x0000 : 0x8000 );
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u16 ConvertColor8888To5551(u32 srcColor)
+{
+	FragmentColor srcColorComponent;
+	srcColorComponent.color = srcColor;
+	
+	return ConvertColor8888To5551<SWAP_RB>(srcColorComponent);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u16 ConvertColor6665To5551(FragmentColor srcColor)
+{
+	return R6G6B6TORGB15( ((SWAP_RB) ? srcColor.b : srcColor.r), srcColor.g, ((SWAP_RB) ? srcColor.r : srcColor.b)) | ((srcColor.a == 0) ? 0x0000 : 0x8000);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE u16 ConvertColor6665To5551(u32 srcColor)
+{
+	FragmentColor srcColorComponent;
+	srcColorComponent.color = srcColor;
+	
+	return ConvertColor6665To5551<SWAP_RB>(srcColorComponent);
+}
+
+#ifdef ENABLE_SSE2
+
+template <bool SWAP_RB>
+FORCEINLINE void ConvertColor555To8888Opaque(const __m128i &src, __m128i &dstLo, __m128i &dstHi)
+{
+	// Conversion algorithm:
+	//    RGB   5-bit to 8-bit formula: dstRGB8 = (srcRGB5 << 3) | ((srcRGB5 >> 2) & 0x07)
+	if (SWAP_RB)
+	{
+		dstLo =                     _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src, 19), _mm_set1_epi32(0x00F80000)), _mm_and_si128(_mm_slli_epi32(src, 14), _mm_set1_epi32(0x00070000)));
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  6), _mm_set1_epi32(0x0000F800)), _mm_and_si128(_mm_slli_epi32(src,  1), _mm_set1_epi32(0x00000700))) );
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src,  7), _mm_set1_epi32(0x000000F8)), _mm_and_si128(_mm_srli_epi32(src, 12), _mm_set1_epi32(0x00000007))) );
+		dstLo = _mm_or_si128(dstLo, _mm_set1_epi32(0xFF000000));
+		
+		dstHi =                     _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  3), _mm_set1_epi32(0x00F80000)), _mm_and_si128(_mm_srli_epi32(src,  2), _mm_set1_epi32(0x00070000)));
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 10), _mm_set1_epi32(0x0000F800)), _mm_and_si128(_mm_srli_epi32(src, 15), _mm_set1_epi32(0x00000700))) );
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 23), _mm_set1_epi32(0x000000F8)), _mm_and_si128(_mm_srli_epi32(src, 28), _mm_set1_epi32(0x00000007))) );
+		dstHi = _mm_or_si128(dstHi, _mm_set1_epi32(0xFF000000));
+	}
+	else
+	{
+		dstLo =                     _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  3), _mm_set1_epi32(0x000000F8)), _mm_and_si128(_mm_srli_epi32(src,  2), _mm_set1_epi32(0x00000007)));
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  6), _mm_set1_epi32(0x0000F800)), _mm_and_si128(_mm_slli_epi32(src,  1), _mm_set1_epi32(0x00000700))) );
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  9), _mm_set1_epi32(0x00F80000)), _mm_and_si128(_mm_slli_epi32(src,  4), _mm_set1_epi32(0x00070000))) );
+		dstLo = _mm_or_si128(dstLo, _mm_set1_epi32(0xFF000000));
+		
+		dstHi =                     _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 13), _mm_set1_epi32(0x000000F8)), _mm_and_si128(_mm_srli_epi32(src, 18), _mm_set1_epi32(0x00000007)));
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 10), _mm_set1_epi32(0x0000F800)), _mm_and_si128(_mm_srli_epi32(src, 15), _mm_set1_epi32(0x00000700))) );
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src,  7), _mm_set1_epi32(0x00F80000)), _mm_and_si128(_mm_srli_epi32(src, 12), _mm_set1_epi32(0x00070000))) );
+		dstHi = _mm_or_si128(dstHi, _mm_set1_epi32(0xFF000000));
+	}
+	
+	__m128i tmpDstLo = dstLo;
+	dstLo = _mm_or_si128( _mm_and_si128(_mm_shuffle_epi32(tmpDstLo, 0xD8), _mm_set_epi32(0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF)), _mm_and_si128(_mm_shuffle_epi32(dstHi, 0x72), _mm_set_epi32(0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000)) );
+	dstHi = _mm_or_si128( _mm_and_si128(_mm_shuffle_epi32(tmpDstLo, 0x72), _mm_set_epi32(0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF)), _mm_and_si128(_mm_shuffle_epi32(dstHi, 0xD8), _mm_set_epi32(0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000)) );
+}
+
+template <bool SWAP_RB>
+FORCEINLINE void ConvertColor555To6665Opaque(const __m128i &src, __m128i &dstLo, __m128i &dstHi)
+{
+	// Conversion algorithm:
+	//    RGB   5-bit to 6-bit formula: dstRGB6 = (srcRGB5 << 1) | ((srcRGB5 >> 4) & 0x01)
+	if (SWAP_RB)
+	{
+		dstLo =                     _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src, 17), _mm_set1_epi32(0x003E0000)), _mm_and_si128(_mm_slli_epi32(src, 12), _mm_set1_epi32(0x00010000)));
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  4), _mm_set1_epi32(0x00003E00)), _mm_and_si128(_mm_srli_epi32(src,  1), _mm_set1_epi32(0x00000100))) );
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src,  9), _mm_set1_epi32(0x0000003E)), _mm_and_si128(_mm_srli_epi32(src, 14), _mm_set1_epi32(0x00000001))) );
+		dstLo = _mm_or_si128(dstLo, _mm_set1_epi32(0x1F000000));
+		
+		dstHi =                     _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  1), _mm_set1_epi32(0x003E0000)), _mm_and_si128(_mm_srli_epi32(src,  4), _mm_set1_epi32(0x00010000)));
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 12), _mm_set1_epi32(0x00003E00)), _mm_and_si128(_mm_srli_epi32(src, 17), _mm_set1_epi32(0x00000100))) );
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 25), _mm_set1_epi32(0x0000003E)), _mm_and_si128(_mm_srli_epi32(src, 30), _mm_set1_epi32(0x00000001))) );
+		dstHi = _mm_or_si128(dstHi, _mm_set1_epi32(0x1F000000));
+	}
+	else
+	{
+		dstLo =                     _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  1), _mm_set1_epi32(0x0000003E)), _mm_and_si128(_mm_srli_epi32(src,  4), _mm_set1_epi32(0x00000001)));
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  4), _mm_set1_epi32(0x00003E00)), _mm_and_si128(_mm_srli_epi32(src,  1), _mm_set1_epi32(0x00000100))) );
+		dstLo = _mm_or_si128(dstLo, _mm_or_si128(_mm_and_si128(_mm_slli_epi32(src,  7), _mm_set1_epi32(0x003E0000)), _mm_and_si128(_mm_slli_epi32(src,  2), _mm_set1_epi32(0x00010000))) );
+		dstLo = _mm_or_si128(dstLo, _mm_set1_epi32(0x1F000000));
+		
+		dstHi =                     _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 15), _mm_set1_epi32(0x0000003E)), _mm_and_si128(_mm_srli_epi32(src, 20), _mm_set1_epi32(0x00000001)));
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src, 12), _mm_set1_epi32(0x00003E00)), _mm_and_si128(_mm_srli_epi32(src, 17), _mm_set1_epi32(0x00000100))) );
+		dstHi = _mm_or_si128(dstHi, _mm_or_si128(_mm_and_si128(_mm_srli_epi32(src,  9), _mm_set1_epi32(0x003E0000)), _mm_and_si128(_mm_srli_epi32(src, 14), _mm_set1_epi32(0x00010000))) );
+		dstHi = _mm_or_si128(dstHi, _mm_set1_epi32(0x1F000000));
+	}
+	
+	__m128i tmpDstLo = dstLo;
+	dstLo = _mm_or_si128( _mm_and_si128(_mm_shuffle_epi32(tmpDstLo, 0xD8), _mm_set_epi32(0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF)), _mm_and_si128(_mm_shuffle_epi32(dstHi, 0x72), _mm_set_epi32(0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000)) );
+	dstHi = _mm_or_si128( _mm_and_si128(_mm_shuffle_epi32(tmpDstLo, 0x72), _mm_set_epi32(0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF)), _mm_and_si128(_mm_shuffle_epi32(dstHi, 0xD8), _mm_set_epi32(0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000)) );
+}
+
+template <bool SWAP_RB>
+FORCEINLINE __m128i ConvertColor8888To6665(const __m128i &src)
+{
+	// Conversion algorithm:
+	//    RGB   8-bit to 6-bit formula: dstRGB6 = (srcRGB8 >> 2)
+	//    Alpha 8-bit to 6-bit formula: dstA5   = (srcA8   >> 3)
+	__m128i rgb;
+	const __m128i a = _mm_and_si128( _mm_srli_epi32(src, 3), _mm_set1_epi32(0x1F000000) );
+	
+	if (SWAP_RB)
+	{
+#ifdef ENABLE_SSSE3
+		rgb = _mm_and_si128( _mm_srli_epi32(src, 2), _mm_set1_epi32(0x003F3F3F) );
+		rgb = _mm_shuffle_epi8( rgb, _mm_set_epi8(15, 12, 13, 14, 11, 8, 9, 10, 7, 4, 5, 6, 3, 0, 1, 2) );
+#else
+		rgb = _mm_or_si128( _mm_srli_epi32(_mm_and_si128(src, _mm_set1_epi32(0x003F0000)), 18), _mm_or_si128(_mm_srli_epi32(_mm_and_si128(src, _mm_set1_epi32(0x00003F00)), 2), _mm_slli_epi32(_mm_and_si128(src, _mm_set1_epi32(0x0000003F)), 14)) );
+#endif
+	}
+	else
+	{
+		rgb = _mm_and_si128( _mm_srli_epi32(src, 2), _mm_set1_epi32(0x003F3F3F) );
+	}
+	
+	return _mm_or_si128(rgb, a);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE __m128i ConvertColor6665To8888(const __m128i &src)
+{
+	// Conversion algorithm:
+	//    RGB   6-bit to 8-bit formula: dstRGB8 = (srcRGB6 << 2) | ((srcRGB6 >> 4) & 0x03)
+	//    Alpha 5-bit to 8-bit formula: dstA8   = (srcA5   << 3) | ((srcA5   >> 2) & 0x07)
+	      __m128i rgb = _mm_or_si128( _mm_and_si128(_mm_slli_epi32(src, 2), _mm_set1_epi32(0x00FCFCFC)), _mm_and_si128(_mm_srli_epi32(src, 4), _mm_set1_epi32(0x00030303)) );
+	const __m128i a   = _mm_or_si128( _mm_and_si128(_mm_slli_epi32(src, 3), _mm_set1_epi32(0xF8000000)), _mm_and_si128(_mm_srli_epi32(src, 2), _mm_set1_epi32(0x07000000)) );
+	
+	if (SWAP_RB)
+	{
+#ifdef ENABLE_SSSE3
+		rgb = _mm_shuffle_epi8( rgb, _mm_set_epi8(15, 12, 13, 14, 11, 8, 9, 10, 7, 4, 5, 6, 3, 0, 1, 2) );
+#else
+		rgb = _mm_or_si128( _mm_srli_epi32(_mm_and_si128(src, _mm_set1_epi32(0x00FF0000)), 16), _mm_or_si128(_mm_and_si128(src, _mm_set1_epi32(0x0000FF00)), _mm_slli_epi32(_mm_and_si128(src, _mm_set1_epi32(0x000000FF)), 16)) );
+#endif
+	}
+	
+	return _mm_or_si128(rgb, a);
+}
+
+template <NDSColorFormat COLORFORMAT, bool SWAP_RB>
+FORCEINLINE __m128i _ConvertColorBaseTo5551(const __m128i &srcLo, const __m128i &srcHi)
+{
+	if (COLORFORMAT == NDSColorFormat_BGR555_Rev)
+	{
+		return srcLo;
+	}
+	
+	__m128i rgbLo;
+	__m128i rgbHi;
+	__m128i alpha;
+	
+	if (COLORFORMAT == NDSColorFormat_BGR666_Rev)
+	{
+		if (SWAP_RB)
+		{
+			// Convert color from low bits
+			rgbLo =                     _mm_and_si128(_mm_srli_epi32(srcLo, 17), _mm_set1_epi32(0x0000001F));
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_srli_epi32(srcLo,  4), _mm_set1_epi32(0x000003E0)) );
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_slli_epi32(srcLo,  9), _mm_set1_epi32(0x00007C00)) );
+			
+			// Convert color from high bits
+			rgbHi =                     _mm_and_si128(_mm_srli_epi32(srcHi, 17), _mm_set1_epi32(0x0000001F));
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_srli_epi32(srcHi,  4), _mm_set1_epi32(0x000003E0)) );
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_slli_epi32(srcHi,  9), _mm_set1_epi32(0x00007C00)) );
+		}
+		else
+		{
+			// Convert color from low bits
+			rgbLo =                     _mm_and_si128(_mm_srli_epi32(srcLo,  1), _mm_set1_epi32(0x0000001F));
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_srli_epi32(srcLo,  4), _mm_set1_epi32(0x000003E0)) );
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_srli_epi32(srcLo,  7), _mm_set1_epi32(0x00007C00)) );
+			
+			// Convert color from high bits
+			rgbHi =                     _mm_and_si128(_mm_srli_epi32(srcHi,  1), _mm_set1_epi32(0x0000001F));
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_srli_epi32(srcHi,  4), _mm_set1_epi32(0x000003E0)) );
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_srli_epi32(srcHi,  7), _mm_set1_epi32(0x00007C00)) );
+		}
+		
+		// Convert alpha
+		alpha = _mm_packs_epi32( _mm_and_si128(_mm_srli_epi32(srcLo, 24), _mm_set1_epi32(0x0000001F)), _mm_and_si128(_mm_srli_epi32(srcHi, 24), _mm_set1_epi32(0x0000001F)) );
+		alpha = _mm_cmpgt_epi16(alpha, _mm_setzero_si128());
+		alpha = _mm_and_si128(alpha, _mm_set1_epi16(0x8000));
+	}
+	else if (COLORFORMAT == NDSColorFormat_BGR888_Rev)
+	{
+		if (SWAP_RB)
+		{
+			// Convert color from low bits
+			rgbLo =                     _mm_and_si128(_mm_srli_epi32(srcLo, 19), _mm_set1_epi32(0x0000001F));
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_srli_epi32(srcLo,  6), _mm_set1_epi32(0x000003E0)) );
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_slli_epi32(srcLo,  7), _mm_set1_epi32(0x00007C00)) );
+			
+			// Convert color from high bits
+			rgbHi =                     _mm_and_si128(_mm_srli_epi32(srcHi, 19), _mm_set1_epi32(0x0000001F));
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_srli_epi32(srcHi,  6), _mm_set1_epi32(0x000003E0)) );
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_slli_epi32(srcHi,  7), _mm_set1_epi32(0x00007C00)) );
+		}
+		else
+		{
+			// Convert color from low bits
+			rgbLo =                     _mm_and_si128(_mm_srli_epi32(srcLo,  3), _mm_set1_epi32(0x0000001F));
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_srli_epi32(srcLo,  6), _mm_set1_epi32(0x000003E0)) );
+			rgbLo = _mm_or_si128(rgbLo, _mm_and_si128(_mm_srli_epi32(srcLo,  9), _mm_set1_epi32(0x00007C00)) );
+			
+			// Convert color from high bits
+			rgbHi =                     _mm_and_si128(_mm_srli_epi32(srcHi,  3), _mm_set1_epi32(0x0000001F));
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_srli_epi32(srcHi,  6), _mm_set1_epi32(0x000003E0)) );
+			rgbHi = _mm_or_si128(rgbHi, _mm_and_si128(_mm_srli_epi32(srcHi,  9), _mm_set1_epi32(0x00007C00)) );
+		}
+		
+		// Convert alpha
+		alpha = _mm_packs_epi32( _mm_and_si128(_mm_srli_epi32(srcLo, 24), _mm_set1_epi32(0x000000FF)), _mm_and_si128(_mm_srli_epi32(srcHi, 24), _mm_set1_epi32(0x000000FF)) );
+		alpha = _mm_cmpgt_epi16(alpha, _mm_setzero_si128());
+		alpha = _mm_and_si128(alpha, _mm_set1_epi16(0x8000));
+	}
+	
+	return _mm_or_si128(_mm_packs_epi32(rgbLo, rgbHi), alpha);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE __m128i ConvertColor8888To5551(const __m128i &srcLo, const __m128i &srcHi)
+{
+	return _ConvertColorBaseTo5551<NDSColorFormat_BGR888_Rev, SWAP_RB>(srcLo, srcHi);
+}
+
+template <bool SWAP_RB>
+FORCEINLINE __m128i ConvertColor6665To5551(const __m128i &srcLo, const __m128i &srcHi)
+{
+	return _ConvertColorBaseTo5551<NDSColorFormat_BGR666_Rev, SWAP_RB>(srcLo, srcHi);
+}
+
+#endif
+
+template<bool SWAP_RB, bool UNALIGNED> void ConvertColorBuffer555To8888Opaque(const u16 *__restrict src, u32 *__restrict dst, size_t pixCount);
+template<bool SWAP_RB, bool UNALIGNED> void ConvertColorBuffer555To6665Opaque(const u16 *__restrict src, u32 *__restrict dst, size_t pixCount);
+
+template<bool SWAP_RB> void ConvertColorBuffer8888To6665(const u32 *src, u32 *dst, size_t pixCount);
+template<bool SWAP_RB> void ConvertColorBuffer6665To8888(const u32 *src, u32 *dst, size_t pixCount);
+
+template<bool SWAP_RB, bool UNALIGNED> void ConvertColorBuffer8888To5551(const u32 *__restrict src, u16 *__restrict dst, size_t pixCount);
+template<bool SWAP_RB, bool UNALIGNED> void ConvertColorBuffer6665To5551(const u32 *__restrict src, u16 *__restrict dst, size_t pixCount);
 
 #endif
