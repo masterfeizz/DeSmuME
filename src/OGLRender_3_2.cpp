@@ -251,7 +251,7 @@ static const char *GeometryFragShader_150 = {"\
 		outFragColor = newFragColor;\n\
 		outFragDepth = vec4( packVec3FromFloat(newFragDepth), float(bool(polyEnableDepthWrite) && (newFragColor.a > 0.999 || bool(polySetNewDepthForTranslucent))));\n\
 		outPolyID = vec4(float(polyID)/63.0, 0.0, 0.0, float(newFragColor.a > 0.999));\n\
-		outFogAttributes = vec4( float(polyEnableFog), 0.0, 0.0, float(newFragColor.a > 0.999 || !bool(polyEnableFog)));\n\
+		outFogAttributes = vec4(float(polyEnableFog), 0.0, 0.0, float((newFragColor.a > 0.999) ? 1.0 : 0.5));\n\
 		gl_FragDepth = newFragDepth;\n\
 	} \n\
 "};
@@ -420,7 +420,7 @@ static const char *FogFragShader_150 = {"\
 	{\n\
 		vec4 inFragColor = texture(texInFragColor, texCoord);\n\
 		vec4 inFogAttributes = texture(texInFogAttributes, texCoord);\n\
-		bool polyEnableFog = bool(inFogAttributes.r);\n\
+		bool polyEnableFog = (inFogAttributes.r > 0.999);\n\
 		vec4 newFoggedColor = inFragColor;\n\
 		\n\
 		if (polyEnableFog)\n\
@@ -1359,7 +1359,7 @@ Render3DError OpenGLRenderer_3_2::BeginRender(const GFX3D &engine)
 	state->fogColor.g = divide5bitBy31_LUT[(engine.renderState.fogColor >>  5) & 0x0000001F];
 	state->fogColor.b = divide5bitBy31_LUT[(engine.renderState.fogColor >> 10) & 0x0000001F];
 	state->fogColor.a = divide5bitBy31_LUT[(engine.renderState.fogColor >> 16) & 0x0000001F];
-	state->fogOffset = (GLfloat)engine.renderState.fogOffset / 32767.0f;
+	state->fogOffset = (GLfloat)(engine.renderState.fogOffset & 0x7FFF) / 32767.0f;
 	state->fogStep = (GLfloat)(0x0400 >> engine.renderState.fogShift) / 32767.0f;
 	
 	for (size_t i = 0; i < 32; i++)
@@ -1408,7 +1408,7 @@ Render3DError OpenGLRenderer_3_2::BeginRender(const GFX3D &engine)
 		
 		polyStates[i].enableTexture = (texParams.texFormat != TEXMODE_NONE && engine.renderState.enableTexturing) ? GL_TRUE : GL_FALSE;
 		polyStates[i].enableFog = (polyAttr.enableRenderFog && !(polyAttr.polygonMode == POLYGON_MODE_SHADOW && polyAttr.polygonID == 0)) ? GL_TRUE : GL_FALSE;
-		polyStates[i].enableDepthWrite = ((!polyAttr.isTranslucent || polyAttr.enableAlphaDepthWrite) && !(polyAttr.polygonMode == POLYGON_MODE_SHADOW && polyAttr.polygonID == 0)) ? GL_TRUE : GL_FALSE;
+		polyStates[i].enableDepthWrite = !(polyAttr.polygonMode == POLYGON_MODE_SHADOW && polyAttr.polygonID == 0) ? GL_TRUE : GL_FALSE;
 		polyStates[i].setNewDepthForTranslucent = (polyAttr.enableAlphaDepthWrite) ? GL_TRUE : GL_FALSE;
 		polyStates[i].polyAlpha = (!polyAttr.isWireframe && polyAttr.isTranslucent) ? polyAttr.alpha : 0x1F;
 		polyStates[i].polyMode = polyAttr.polygonMode;
@@ -1585,7 +1585,7 @@ Render3DError OpenGLRenderer_3_2::ClearUsingImage(const u16 *__restrict colorBuf
 	return OGLERROR_NOERR;
 }
 
-Render3DError OpenGLRenderer_3_2::ClearUsingValues(const FragmentColor &clearColor, const FragmentAttributes &clearAttributes) const
+Render3DError OpenGLRenderer_3_2::ClearUsingValues(const FragmentColor &clearColor6665, const FragmentAttributes &clearAttributes) const
 {
 	OGLRenderRef &OGLRef = *this->ref;
 	OGLRef.selectedRenderingFBO = (CommonSettings.GFX3D_Renderer_Multisample) ? OGLRef.fboMSIntermediateRenderID : OGLRef.fboRenderID;
@@ -1593,10 +1593,10 @@ Render3DError OpenGLRenderer_3_2::ClearUsingValues(const FragmentColor &clearCol
 	glDrawBuffers(4, RenderDrawList);
 	glDepthMask(GL_TRUE);
 	
-	const GLfloat oglColor[4] = {divide5bitBy31_LUT[clearColor.r], divide5bitBy31_LUT[clearColor.g], divide5bitBy31_LUT[clearColor.b], divide5bitBy31_LUT[clearColor.a]};
+	const GLfloat oglColor[4] = {divide6bitBy63_LUT[clearColor6665.r], divide6bitBy63_LUT[clearColor6665.g], divide6bitBy63_LUT[clearColor6665.b], divide5bitBy31_LUT[clearColor6665.a]};
 	const GLfloat oglDepth[4] = {(GLfloat)(clearAttributes.depth & 0x000000FF)/255.0f, (GLfloat)((clearAttributes.depth >> 8) & 0x000000FF)/255.0f, (GLfloat)((clearAttributes.depth >> 16) & 0x000000FF)/255.0f, 1.0};
-	const GLfloat oglPolyID[4] = {(GLfloat)clearAttributes.opaquePolyID/63.0f, 0.0, 0.0, 1.0};
-	const GLfloat oglFogAttr[4] = {(GLfloat)clearAttributes.isFogged, 0.0, 0.0, 1.0};
+	const GLfloat oglPolyID[4] = {(GLfloat)clearAttributes.opaquePolyID/63.0f, 0.0f, 0.0f, 1.0f};
+	const GLfloat oglFogAttr[4] = {(GLfloat)clearAttributes.isFogged, 0.0f, 0.0f, 1.0f};
 	
 	glClearBufferfi(GL_DEPTH_STENCIL, 0, (GLfloat)clearAttributes.depth / (GLfloat)0x00FFFFFF, 0xFF);
 	glClearBufferfv(GL_COLOR, 0, oglColor); // texGColorID
