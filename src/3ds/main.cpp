@@ -133,6 +133,15 @@ int main(int argc, char **argv)
 	NDS_FillDefaultFirmwareConfigData(&fw_config);
 
   	NDS_Init();
+	if( access( "sdmc:/game.img", F_OK ) != -1 ) {
+	
+	slot2_Init();
+	
+	slot2_Change(NDS_SLOT2_CFLASH);
+	
+	CFlash_Path = "sdmc:/game.img";
+	CFlash_Mode = ADDON_CFLASH_MODE_File;
+	}
 
 	NDS_3D_ChangeCore(1);
 
